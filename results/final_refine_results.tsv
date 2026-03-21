@@ -1,0 +1,5 @@
+config	mean_val_bpb	std_val_bpb	n
+control_final	2.066933	0.007412	4
+late_onset_final	2.071859	0.013159	4
+delta_half_final	2.065578	0.006197	4
+capped_final	2.050790	0.003763	4

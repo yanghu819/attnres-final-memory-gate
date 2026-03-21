@@ -1,0 +1,4 @@
+control_final	final_ema_loss_mean=5.019842	final_ema_loss_std=0.023382
+late_onset_final	final_ema_loss_mean=5.029418	final_ema_loss_std=0.027769
+delta_half_final	final_ema_loss_mean=5.023257	final_ema_loss_std=0.017904
+capped_final	final_ema_loss_mean=5.019622	final_ema_loss_std=0.006772

@@ -1,0 +1,5 @@
+control_cap00	final_ema_loss_mean=5.019842	final_ema_loss_std=0.023382
+cap085	final_ema_loss_mean=5.018894	final_ema_loss_std=0.015330
+cap090	final_ema_loss_mean=5.019622	final_ema_loss_std=0.006772
+cap095	final_ema_loss_mean=5.018128	final_ema_loss_std=0.015484
+cap090_d05	final_ema_loss_mean=5.029938	final_ema_loss_std=0.024259

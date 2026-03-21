@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.python-version
+.ipynb_checkpoints/
+runs/
+.cache/
+results/generated/
+*.log

@@ -1,0 +1,7 @@
+config	mean_val_bpb	std_val_bpb	n
+strong_baseline	2.154041	0.055560	4
+static_full_s025_c085	2.048350	0.003479	4
+static_factorized_r32_s025_c085	2.153012	0.002361	4
+static_factorized_r64_s025_c085	2.103238	0.001893	4
+static_factorized_r128_s025_c085	2.070049	0.002011	4
+static_tied_s025_c085	2.050510	0.000981	4
