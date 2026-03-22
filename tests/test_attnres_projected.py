@@ -19,6 +19,90 @@ from autoresearch_attnres_project.metrics import parse_required_summary_metrics
 
 
 class AttnResProjectedTests(unittest.TestCase):
+    def test_depth_mixer_source_key_scale_changes_weights(self):
+        mixer = train.DepthSoftmaxMixer(num_queries=1, dim=4)
+        mixer.init_weights()
+        mixer.queries.data[0] = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        sources = torch.tensor(
+            [
+                [[[1.0, 0.0, 0.0, 0.0]]],
+                [[[0.0, 1.0, 0.0, 0.0]]],
+            ],
+            dtype=torch.float32,
+        )
+        _, weights_base, _ = mixer.mix_with_weights(0, sources, include_registers=False)
+        _, weights_scaled, _ = mixer.mix_with_weights(
+            0,
+            sources,
+            include_registers=False,
+            source_key_scale=torch.tensor([[[0.0, 1.0, 1.0, 1.0]]]),
+        )
+        self.assertGreater(float(weights_base[0, 0, 0]), 0.5)
+        self.assertAlmostEqual(float(weights_scaled[0, 0, 0]), 0.5, places=6)
+
+    def test_depth_mixer_source_value_scale_changes_mixed_output(self):
+        mixer = train.DepthSoftmaxMixer(num_queries=1, dim=4)
+        mixer.init_weights()
+        sources = torch.tensor(
+            [
+                [[[1.0, 0.0, 0.0, 0.0]]],
+                [[[0.0, 1.0, 0.0, 0.0]]],
+            ],
+            dtype=torch.float32,
+        )
+        mixed_base, _, _ = mixer.mix_with_weights(0, sources, include_registers=False)
+        mixed_scaled, _, _ = mixer.mix_with_weights(
+            0,
+            sources,
+            include_registers=False,
+            source_value_scale=torch.tensor([[[1.0, 2.0, 1.0, 1.0]]]),
+        )
+        self.assertTrue(torch.allclose(mixed_base, torch.tensor([[[0.5, 0.5, 0.0, 0.0]]]), atol=1e-6, rtol=0.0))
+        self.assertTrue(torch.allclose(mixed_scaled, torch.tensor([[[0.5, 1.0, 0.0, 0.0]]]), atol=1e-6, rtol=0.0))
+
+    def test_depth_mixer_source_value_residual_changes_mixed_output(self):
+        mixer = train.DepthSoftmaxMixer(num_queries=1, dim=4)
+        mixer.init_weights()
+        sources = torch.tensor(
+            [
+                [[[1.0, 0.0, 0.0, 0.0]]],
+                [[[0.0, 1.0, 0.0, 0.0]]],
+            ],
+            dtype=torch.float32,
+        )
+        mixed_base, _, _ = mixer.mix_with_weights(0, sources, include_registers=False)
+        mixed_resid, _, _ = mixer.mix_with_weights(
+            0,
+            sources,
+            include_registers=False,
+            source_value_residual=torch.tensor([[[1.0, 0.0, 0.0, 0.0]]]),
+        )
+        self.assertTrue(torch.allclose(mixed_base, torch.tensor([[[0.5, 0.5, 0.0, 0.0]]]), atol=1e-6, rtol=0.0))
+        # value residuals are applied on top of RMS-normalized source values.
+        # For a one-hot vector in dim=4, rms_norm scales the active entry to 2.0.
+        # With uniform 0.5 / 0.5 routing, the residual contributes +1.0 on dim 0.
+        self.assertTrue(torch.allclose(mixed_resid, torch.tensor([[[1.5, 0.5, 0.0, 0.0]]]), atol=1e-6, rtol=0.0))
+
+    def test_depth_mixer_source_logit_bias_changes_weights(self):
+        mixer = train.DepthSoftmaxMixer(num_queries=1, dim=4)
+        mixer.init_weights()
+        sources = torch.tensor(
+            [
+                [[[1.0, 0.0, 0.0, 0.0]]],
+                [[[0.0, 1.0, 0.0, 0.0]]],
+            ],
+            dtype=torch.float32,
+        )
+        _, weights_base, _ = mixer.mix_with_weights(0, sources, include_registers=False)
+        _, weights_biased, _ = mixer.mix_with_weights(
+            0,
+            sources,
+            include_registers=False,
+            source_logit_bias=torch.tensor([0.0, 2.0]),
+        )
+        self.assertAlmostEqual(float(weights_base[0, 0, 0]), 0.5, places=6)
+        self.assertGreater(float(weights_biased[1, 0, 0]), float(weights_base[1, 0, 0]))
+
     def test_final_memory_static_gate_matches_cap_times_sigmoid_bias(self):
         cfg = train.GPTConfig(
             sequence_len=8,
@@ -37,6 +121,7 @@ class AttnResProjectedTests(unittest.TestCase):
             mlp_activation='gelu',
             reference_init=True,
             reference_optimizer=True,
+            window_pattern='L',
             attnres_mode='block',
             attnres_block_size=2,
             attnres_weight_mode='softmax',
@@ -74,6 +159,7 @@ class AttnResProjectedTests(unittest.TestCase):
             mlp_activation='gelu',
             reference_init=True,
             reference_optimizer=True,
+            window_pattern='L',
             attnres_mode='block',
             attnres_block_size=2,
             attnres_weight_mode='softmax',
@@ -97,6 +183,180 @@ class AttnResProjectedTests(unittest.TestCase):
         out_dynamic, stats_dynamic = dynamic_model._apply_attnres_final_memory(idx, x)
         self.assertTrue(torch.allclose(out_static, out_dynamic, atol=1e-6, rtol=0.0))
         self.assertAlmostEqual(float(stats_static["final_memory_gate"]), float(stats_dynamic["final_memory_gate"]), places=6)
+
+    def test_hybrid_static_uses_separate_query_and_blend_gates(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='hybrid_static',
+            attnres_final_memory_source='full',
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+            attnres_final_memory_query_cap=0.10,
+            attnres_final_memory_query_bias_init=0.0,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        idx = torch.tensor([[1, 2]], dtype=torch.long)
+        x = torch.zeros(1, 2, 8)
+        _, blend_stats = model._apply_attnres_final_memory(idx, x)
+        _, query_stats = model._build_attnres_final_memory_query(idx, x)
+        self.assertAlmostEqual(float(blend_stats["final_memory_gate"]), float(0.85 * torch.sigmoid(torch.tensor(4.0))), places=4)
+        self.assertAlmostEqual(float(query_stats["final_memory_query_gate"]), float(0.10 * torch.sigmoid(torch.tensor(0.0))), places=4)
+
+    def test_zero_hybrid_projected_query_reduces_to_hybrid_static_query(self):
+        common = dict(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_source='full',
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+            attnres_final_memory_query_cap=0.10,
+            attnres_final_memory_query_bias_init=0.0,
+            attnres_final_memory_query_delta_scale=1.0,
+        )
+        static_model = train.GPT(train.GPTConfig(**common, attnres_final_memory_mode='hybrid_static'))
+        projected_model = train.GPT(train.GPTConfig(**common, attnres_final_memory_mode='hybrid_projected'))
+        static_model.init_weights()
+        projected_model.init_weights()
+        projected_model.load_state_dict(static_model.state_dict(), strict=False)
+        projected_model.attnres_final_memory_query_proj.weight.data.zero_()
+        idx = torch.tensor([[1, 2]], dtype=torch.long)
+        x = torch.randn(1, 2, 8)
+        query_static, stats_static = static_model._build_attnres_final_memory_query(idx, x)
+        query_proj, stats_proj = projected_model._build_attnres_final_memory_query(idx, x)
+        self.assertTrue(torch.allclose(query_static, query_proj, atol=1e-6, rtol=0.0))
+        self.assertAlmostEqual(float(stats_static["final_memory_query_gate"]), float(stats_proj["final_memory_query_gate"]), places=6)
+
+    def test_zero_modkv_reduces_to_identity_modulation(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='modkv',
+            attnres_final_memory_source='tied_bigram',
+            attnres_final_memory_bigram_buckets=16,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_k_mod_scale=0.05,
+            attnres_final_memory_v_mod_scale=0.05,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        idx = torch.tensor([[1, 2]], dtype=torch.long)
+        q_delta, logit_bias, key_scale, value_scale, value_residual, stats = model._build_attnres_final_memory_modulation(idx)
+        self.assertIsNone(q_delta)
+        self.assertIsNone(logit_bias)
+        self.assertIsNone(value_residual)
+        self.assertTrue(torch.allclose(key_scale, torch.ones_like(key_scale), atol=1e-6, rtol=0.0))
+        self.assertTrue(torch.allclose(value_scale, torch.ones_like(value_scale), atol=1e-6, rtol=0.0))
+        self.assertAlmostEqual(float(stats["final_memory_mod_k_delta_norm"]), 0.0, places=6)
+        self.assertAlmostEqual(float(stats["final_memory_mod_v_delta_norm"]), 0.0, places=6)
+
+    def test_zero_vres_reduces_to_identity_residual(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='vres',
+            attnres_final_memory_source='tied',
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_vres_scale=0.05,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        idx = torch.tensor([[1, 2]], dtype=torch.long)
+        q_delta, logit_bias, key_scale, value_scale, value_residual, stats = model._build_attnres_final_memory_modulation(idx)
+        self.assertIsNone(q_delta)
+        self.assertIsNone(logit_bias)
+        self.assertIsNone(key_scale)
+        self.assertIsNone(value_scale)
+        self.assertTrue(torch.allclose(value_residual, torch.zeros_like(value_residual), atol=1e-6, rtol=0.0))
+        self.assertAlmostEqual(float(stats["final_memory_vres_delta_norm"]), 0.0, places=6)
 
     def test_final_memory_mode_requires_no_registers(self):
         with self.assertRaises(ValueError):
@@ -146,6 +406,7 @@ class AttnResProjectedTests(unittest.TestCase):
             mlp_activation='gelu',
             reference_init=True,
             reference_optimizer=True,
+            window_pattern='L',
             attnres_mode='block',
             attnres_block_size=2,
             attnres_weight_mode='softmax',
@@ -192,6 +453,7 @@ class AttnResProjectedTests(unittest.TestCase):
             mlp_activation='gelu',
             reference_init=True,
             reference_optimizer=True,
+            window_pattern='L',
             attnres_mode='block',
             attnres_block_size=2,
             attnres_weight_mode='softmax',
@@ -236,6 +498,7 @@ class AttnResProjectedTests(unittest.TestCase):
             mlp_activation='gelu',
             reference_init=True,
             reference_optimizer=True,
+            window_pattern='L',
             attnres_mode='block',
             attnres_block_size=2,
             attnres_weight_mode='softmax',
@@ -256,6 +519,387 @@ class AttnResProjectedTests(unittest.TestCase):
         memory = model._build_attnres_final_memory(idx)
         expected = torch.arange(8, dtype=memory.dtype).view(1, 1, 8)
         self.assertTrue(torch.allclose(memory, expected, atol=1e-6, rtol=0.0))
+
+    def test_tied_residual_zero_init_matches_tied_memory(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='static',
+            attnres_final_memory_source='tied_residual',
+            attnres_final_memory_residual_rank=4,
+            attnres_final_memory_residual_scale=1.0,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=1.0,
+            attnres_final_memory_gate_bias_init=10.0,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        model.transformer.wte.weight.data.zero_()
+        model.transformer.wte.weight.data[3] = torch.arange(8, dtype=model.transformer.wte.weight.dtype)
+        idx = torch.tensor([[3]], dtype=torch.long)
+        memory = model._build_attnres_final_memory(idx)
+        expected = torch.arange(8, dtype=memory.dtype).view(1, 1, 8)
+        self.assertTrue(torch.allclose(memory, expected, atol=1e-6, rtol=0.0))
+
+    def test_tied_bigram_zero_init_matches_tied_memory(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='static',
+            attnres_final_memory_source='tied_bigram',
+            attnres_final_memory_bigram_buckets=16,
+            attnres_final_memory_bigram_scale=1.0,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=1.0,
+            attnres_final_memory_gate_bias_init=10.0,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        model.transformer.wte.weight.data.zero_()
+        model.transformer.wte.weight.data[4] = torch.arange(8, dtype=model.transformer.wte.weight.dtype)
+        idx = torch.tensor([[4]], dtype=torch.long)
+        memory = model._build_attnres_final_memory(idx)
+        expected = torch.arange(8, dtype=memory.dtype).view(1, 1, 8)
+        self.assertTrue(torch.allclose(memory, expected, atol=1e-6, rtol=0.0))
+
+    def test_tied_bigram_multibank_zero_init_matches_tied_memory(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='static',
+            attnres_final_memory_source='tied_bigram',
+            attnres_final_memory_bigram_buckets=16,
+            attnres_final_memory_bigram_banks=3,
+            attnres_final_memory_bigram_scale=1.0,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=1.0,
+            attnres_final_memory_gate_bias_init=10.0,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        model.transformer.wte.weight.data.zero_()
+        model.transformer.wte.weight.data[4] = torch.arange(8, dtype=model.transformer.wte.weight.dtype)
+        idx = torch.tensor([[4]], dtype=torch.long)
+        memory = model._build_attnres_final_memory(idx)
+        expected = torch.arange(8, dtype=memory.dtype).view(1, 1, 8)
+        self.assertTrue(torch.allclose(memory, expected, atol=1e-6, rtol=0.0))
+
+    def test_tied_bigram_only_zero_init_is_zero_memory(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='static',
+            attnres_final_memory_source='tied_bigram_only',
+            attnres_final_memory_bigram_buckets=16,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_bigram_scale=1.0,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=1.0,
+            attnres_final_memory_gate_bias_init=10.0,
+        )
+        model = train.GPT(cfg)
+        model.init_weights()
+        idx = torch.tensor([[4]], dtype=torch.long)
+        memory = model._build_attnres_final_memory(idx)
+        self.assertTrue(torch.allclose(memory, torch.zeros_like(memory), atol=1e-6, rtol=0.0))
+
+    def test_tied_bigram_only_omits_unigram_base(self):
+        common = dict(
+            sequence_len=8,
+            vocab_size=16,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=8,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='static',
+            attnres_final_memory_bigram_buckets=16,
+            attnres_final_memory_bigram_scale=1.0,
+            attnres_final_memory_value_mode='raw',
+            attnres_final_memory_scale=1.0,
+            attnres_final_memory_gate_cap=1.0,
+            attnres_final_memory_gate_bias_init=10.0,
+        )
+        tied_model = train.GPT(train.GPTConfig(**common, attnres_final_memory_source='tied_bigram'))
+        bigram_only_model = train.GPT(train.GPTConfig(**common, attnres_final_memory_source='tied_bigram_only'))
+        tied_model.init_weights()
+        bigram_only_model.init_weights()
+        tied_model.transformer.wte.weight.data.zero_()
+        bigram_only_model.transformer.wte.weight.data.zero_()
+        tied_model.transformer.wte.weight.data[4] = torch.arange(8, dtype=tied_model.transformer.wte.weight.dtype)
+        bigram_only_model.transformer.wte.weight.data[4] = torch.arange(8, dtype=bigram_only_model.transformer.wte.weight.dtype)
+        idx = torch.tensor([[4]], dtype=torch.long)
+        tied_memory = tied_model._build_attnres_final_memory(idx)
+        bigram_only_memory = bigram_only_model._build_attnres_final_memory(idx)
+        expected = torch.arange(8, dtype=tied_memory.dtype).view(1, 1, 8)
+        self.assertTrue(torch.allclose(tied_memory, expected, atol=1e-6, rtol=0.0))
+        self.assertTrue(torch.allclose(bigram_only_memory, torch.zeros_like(bigram_only_memory), atol=1e-6, rtol=0.0))
+
+    def test_unified_static_final_memory_logs_memory_source_weights(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=32,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=16,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='unified_static',
+            attnres_final_memory_source='tied_bigram',
+            attnres_final_memory_value_mode='rmsnorm',
+            attnres_final_memory_scale=0.25,
+            attnres_final_memory_groups=1,
+            attnres_final_memory_bigram_buckets=64,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+        )
+        model = train.GPT(cfg)
+        idx = torch.randint(0, cfg.vocab_size, (2, 8))
+        targets = torch.randint(0, cfg.vocab_size, (2, 8))
+        loss = model(idx, targets)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn('memory_total', model.last_attnres_metrics)
+        self.assertIn('memory_unigram', model.last_attnres_metrics)
+        self.assertIn('memory_bigram_bank0', model.last_attnres_metrics)
+        self.assertIn('memory_bigram_bank1', model.last_attnres_metrics)
+
+    def test_unified_projected_final_memory_forward(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=32,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=16,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='unified_projected',
+            attnres_final_memory_source='tied_bigram_only',
+            attnres_final_memory_value_mode='rmsnorm',
+            attnres_final_memory_scale=0.25,
+            attnres_final_memory_groups=1,
+            attnres_final_memory_bigram_buckets=64,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+        )
+        model = train.GPT(cfg)
+        idx = torch.randint(0, cfg.vocab_size, (2, 8))
+        targets = torch.randint(0, cfg.vocab_size, (2, 8))
+        loss = model(idx, targets)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(model.attnres_final_memory_unified_proj)
+        self.assertIn('memory_total', model.last_attnres_metrics)
+
+    def test_query_static_final_memory_logs_query_stats(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=32,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=16,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='query_static',
+            attnres_final_memory_source='tied_bigram',
+            attnres_final_memory_value_mode='rmsnorm',
+            attnres_final_memory_scale=0.25,
+            attnres_final_memory_groups=1,
+            attnres_final_memory_bigram_buckets=64,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+        )
+        model = train.GPT(cfg)
+        idx = torch.randint(0, cfg.vocab_size, (2, 8))
+        targets = torch.randint(0, cfg.vocab_size, (2, 8))
+        loss = model(idx, targets)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIn('final_memory_query_gate', model.last_attnres_metrics)
+        self.assertIn('final_memory_query_norm', model.last_attnres_metrics)
+        self.assertNotIn('memory_total', model.last_attnres_metrics)
+
+    def test_query_projected_final_memory_forward(self):
+        cfg = train.GPTConfig(
+            sequence_len=8,
+            vocab_size=32,
+            n_layer=2,
+            n_head=2,
+            n_kv_head=2,
+            n_embd=16,
+            dropout=0.0,
+            bias=False,
+            use_value_embeds=False,
+            use_rotary=False,
+            use_qk_norm=False,
+            use_absolute_positions=True,
+            norm_type='layernorm',
+            mlp_activation='gelu',
+            reference_init=True,
+            reference_optimizer=True,
+            window_pattern='L',
+            attnres_mode='block',
+            attnres_block_size=2,
+            attnres_weight_mode='softmax',
+            attnres_num_registers=0,
+            attnres_token_registers=0,
+            attnres_final_memory_mode='query_projected',
+            attnres_final_memory_source='tied_bigram_only',
+            attnres_final_memory_value_mode='rmsnorm',
+            attnres_final_memory_scale=0.25,
+            attnres_final_memory_groups=1,
+            attnres_final_memory_bigram_buckets=64,
+            attnres_final_memory_bigram_banks=2,
+            attnres_final_memory_gate_cap=0.85,
+            attnres_final_memory_gate_bias_init=4.0,
+        )
+        model = train.GPT(cfg)
+        idx = torch.randint(0, cfg.vocab_size, (2, 8))
+        targets = torch.randint(0, cfg.vocab_size, (2, 8))
+        loss = model(idx, targets)
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(model.attnres_final_memory_gate_proj)
+        self.assertIn('final_memory_query_delta_norm', model.last_attnres_metrics)
 
     def test_token_register_scale_warmup_changes_runtime_scale(self):
         cfg = train.GPTConfig(

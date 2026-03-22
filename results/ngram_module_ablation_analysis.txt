@@ -1,0 +1,15 @@
+N-gram Module Ablation Summary
+
+best_config	unigram_plus_bigram_4x1m	Unigram + Bigram (4x1M)
+best_mean_val_bpb	1.840970
+baseline_mean_val_bpb	2.154041
+best_minus_baseline	-0.313071
+
+Per-family summary
+unigram_plus_bigram_4x1m	Unigram + Bigram (4x1M)	mean=1.840970	std=0.002048	n=4
+bigram_only_4x1m	Bigram only (4x1M)	mean=1.943597	std=0.031567	n=4
+unigram_only_matched	Unigram only (cap 0.85)	mean=2.050225	std=0.001148	n=4
+unigram_only_best	Unigram only (best unigram)	mean=2.051346	std=0.004059	n=4
+strong_baseline	AttnRes Block2	mean=2.154041	std=0.064155	n=4
+
+unigram_plus_minus_bigram_only	-0.102627

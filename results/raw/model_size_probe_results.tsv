@@ -1,0 +1,16 @@
+size_tag	depth	head_dim	device_batch_size	total_batch_size	config	mode	source	groups	banks	bigram_buckets	peak_vram_mb	val_bpb	num_steps	num_params_M	attnres_final_latest	attnres_final_x0	attnres_final_register	attnres_final_entropy	attnres_final_memory_total	attnres_final_memory_query_gate	attnres_final_memory_query_norm	attnres_final_memory_query_delta_norm
+s384_d6	6	64	64	16384	strong_baseline	off	off	0	0	0	6094.7	2.902014	8	13.9	0.170565	0.105306	0.000000	1.930980				
+s384_d6	6	64	64	16384	blend_ngram_ref	static	tied_bigram	4	4	1048576	17826.5	2.875183	8	1624.5	0.218170	0.056679	0.000000	1.824516				
+s384_d6	6	64	64	16384	unified_ngram_projected	unified_projected	tied_bigram	1	4	1048576	17425.3	2.877567	8	1624.5	0.033114	0.009053	0.850000	1.983302	0.850000			
+s384_d6	6	64	64	16384	query_bigram_only_projected	query_projected	tied_bigram_only	1	4	1048576	17361.7	2.923602	8	1624.5	0.200244	0.121463	0.000000	0.828606		0.781250	2.771317	1.570620
+s384_d6	6	64	64	16384	query_ngram_projected	query_projected	tied_bigram	1	4	1048576	17365.3	3.246040	8	1624.5	0.000000	1.000000	0.000000	0.000000		0.835938	4.094194	0.000000
+m512_d8	8	64	16	16384	strong_baseline	off	off	0	0	0	3229.6	2.906948	8	29.5	0.145161	0.080474	0.000000	2.164859				
+m512_d8	8	64	16	16384	blend_ngram_ref	static	tied_bigram	4	4	1048576	20993.8	2.826065	8	2177.0	0.163494	0.053107	0.000000	2.122303				
+m512_d8	8	64	16	16384	unified_ngram_projected	unified_projected	tied_bigram	1	4	1048576	20993.9	2.867877	8	2177.0	0.026666	0.008249	0.850000	1.962284	0.850000			
+m512_d8	8	64	16	16384	query_bigram_only_projected	query_projected	tied_bigram_only	1	4	1048576	20993.9	2.914997	8	2177.0	0.180155	0.078442	0.000000	0.976939		0.738281	2.984240	2.109375
+m512_d8	8	64	16	16384	query_ngram_projected	query_projected	tied_bigram	1	4	1048576	20993.9	3.199618	8	2177.0	0.000000	1.000000	0.000000	0.000000		0.835938	4.727566	0.000000
+l640_d10	10	64	8	16384	strong_baseline	off	off	0	0	0	3347.2	2.929518	8	54.6	0.100912	0.061704	0.000000	2.345606				
+l640_d10	10	64	8	16384	blend_ngram_ref	static	tied_bigram	4	4	1048576	26538.9	2.744264	8	2739.0	0.118312	0.056548	0.000000	2.343469				
+l640_d10	10	64	8	16384	unified_ngram_projected	unified_projected	tied_bigram	1	4	1048576	26544.5	2.875377	8	2739.0	0.017247	0.007859	0.849997	2.002688	0.849997			
+l640_d10	10	64	8	16384	query_bigram_only_projected	query_projected	tied_bigram_only	1	4	1048576	26543.2	2.930233	8	2739.0	0.172402	0.059624	0.000000	0.980066		0.667969	3.094710	2.703125
+l640_d10	10	64	8	16384	query_ngram_projected	query_projected	tied_bigram	1	4	1048576	26541.3	3.156921	8	2739.0	0.000000	1.000000	0.000000	0.000000		0.835938	5.285655	0.000000

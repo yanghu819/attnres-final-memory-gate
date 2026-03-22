@@ -1,77 +1,144 @@
-# Projected Token Memory on Top of AttnRes
+# N-Gram Memory on Top of AttnRes: Current Best Practice
 
-## Setup
+This post reflects the current state of the experiments. It does not use the older `projected token register` framing.
 
-This project starts from two anchors:
+## The short version
 
-- the `autoresearch` reference backbone
-- a faithful AttnRes reproduction
+The strongest method we have today is not “put memory tokens into the AttnRes softmax” and it is not “turn memory into the query”.
 
-From there, we add a projected token-memory register on top of `AttnRes block2`.
+The strongest method is simpler:
 
-## The comparison we actually care about
+```python
+m = E_uni[token] + sum_b E_bi_b[hash_b(prev_token, token)]
+y = (1 - g) * y_attnres + g * m
+```
 
-There are three levels of baseline in this repo:
+That means:
 
-1. `baseline_off`
-   - raw `autoresearch` backbone
-2. `attnres_block2`
-   - faithful AttnRes strong baseline
-3. `projected_deepemb_final`
-   - our canonical method
+- the backbone is still faithful `AttnRes block2`
+- memory is **unigram + hashed bigram**
+- memory is blended into the final output through a **bounded gate**
 
-That is the main 3-way comparison. The exact current numbers live in:
+In plain words:
 
-- `results/main_results.tsv`
+**let AttnRes do the main reasoning first, then let n-gram memory hand it a small cheat sheet at the end.**
 
-## What the method is
+## What this memory is
 
-The method is not presented here as a broad all-layer residual-topology rewrite.
+The memory here is closer to an Engram-style hashed memory than to a small ordinary embedding:
 
-The clean public form is:
+- `unigram`: memory indexed by the current token
+- `bigram`: memory indexed by `(prev_token, token)`
+- `bank`: an independent hashed bigram table
 
-- AttnRes `block_size=2`
-- one token-conditioned register
-- projected bias
-- `query_local` token table
-- `rmsnorm` value mode
-- `final_only` routing
+The current best setting uses:
 
-In short:
+- `4 banks`
+- `1M buckets` per bank
 
-**AttnRes backbone + projected token memory at the final mixer**
+So we keep four independent bigram memory tables and add their outputs together.
 
-## What the ablation is for
+## Why this works better than more “organic” integrations
 
-The same-cohort ablation exists to answer two narrow questions:
+We tested the more unified versions directly:
 
-1. does `projected` beat `static`?
-2. does `final_only` stay competitive with `all` on the same seeds?
+1. memory as an extra source / KV inside the final softmax  
+Result: memory gets attended too easily and pushes real depth sources out.
 
-Read:
+2. memory as a query token  
+Result: it pushes the final routing into degenerate distributions, sometimes collapsing to `x0 = 1.0`.
 
-- `results/ablation_results.tsv`
-- `results/figs/fig_ablation_loss_curves.png`
-- `results/figs/fig_ablation_valbpb.png`
+3. memory only modulating the final AttnRes mixer’s `q/k/v`  
+Result: this is the best organic version so far, but it still does not beat the bounded blend.
 
-## What the fresh-seed follow-up is for
+So the main rule right now is:
 
-The fresh-seed follow-up is not the main result. It is the robustness check.
+- use memory **late**
+- keep memory **bounded**
+- use memory as **content prior**
+- do **not** let memory compete directly with real depth sources in the same softmax
 
-Read:
+## The strongest current result
 
-- `results/followup_results.tsv`
-- `results/figs/fig_followup_loss_curves.png`
-- `results/figs/fig_followup_valbpb.png`
+Relevant tables:
 
-## Important caveat
+- [`results/ngram_module_ablation_results.tsv`](../results/ngram_module_ablation_results.tsv)
+- [`results/bigram_80pct_refine_results.tsv`](../results/bigram_80pct_refine_results.tsv)
 
-This repo should be described honestly.
+Current best practical method:
 
-If the winning runs still show very large `attnres_final_register`, then the safest interpretation is:
+- `AttnRes block2` baseline: `2.154041`
+- `unigram + bigram, 4 banks x 1M buckets`: `1.840970`
 
-- projected token memory helps
-- the final mixer is the main place where it helps
-- this is closer to a final-path token-memory readout on top of AttnRes than to a uniform all-layer routing improvement
+That is the current best practice.
 
-That caveat makes the claim narrower, but also more defensible.
+## The best organic version
+
+If you insist on avoiding an explicit external blend branch, the best version so far is:
+
+- memory adds no extra token
+- memory adds no extra source
+- memory only modulates the final AttnRes mixer’s `q/k/v`
+
+That is `modqkv`:
+
+```python
+q' = q + 0.02 * Wq(memory)
+k' = k + 0.05 * Wk(memory)
+v' = v + 0.05 * Wv(memory)
+```
+
+Relevant result table:
+
+- [`results/modqkv_refine_results.tsv`](../results/modqkv_refine_results.tsv)
+
+Current best organic result:
+
+- `modqkv q=0.02, k=0.05, v=0.05`: `2.004640`
+
+This is clearly better than the AttnRes baseline, but still worse than the bounded blend.
+
+## One important scaling result
+
+Making the memory bigger did not keep helping forever.
+
+We tested:
+
+- `4 banks x 1M`
+- `5 banks x 1M`
+- `6 banks x 1M`
+- `7 banks x 1M`
+
+Result:
+
+- `4x1m` was best
+- pushing larger than that did not keep improving
+
+So the problem is not simply “more memory is always better”.
+It is more likely:
+
+**the memory structure has to be right.**
+
+## What should come next
+
+If we keep pushing the current best-practice line, the most sensible next steps are:
+
+1. `unigram + bigram + trigram`
+2. `tied unigram + bigram residual + trigram residual`
+3. sparse bank selection instead of larger dense bank summation
+
+That means improving the **structure of the memory**, not making the AttnRes routing itself more complicated.
+
+## Summary
+
+The strongest method today is not “a more complex AttnRes”.
+
+It is:
+
+**AttnRes + bounded unigram/bigram memory readout**
+
+And the best organic attempt so far is:
+
+**memory-conditioned `modqkv`**
+
+But at the moment, the plain bounded final blend still wins.

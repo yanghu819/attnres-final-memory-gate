@@ -161,9 +161,22 @@ class GPTConfig:
     attnres_final_memory_scale: float = 1.0
     attnres_final_memory_groups: int = 1
     attnres_final_memory_rank: int = 0
+    attnres_final_memory_residual_rank: int = 0
+    attnres_final_memory_residual_scale: float = 1.0
+    attnres_final_memory_bigram_buckets: int = 0
+    attnres_final_memory_bigram_banks: int = 1
+    attnres_final_memory_bigram_scale: float = 1.0
     attnres_final_memory_gate_cap: float = 0.0
     attnres_final_memory_gate_bias_init: float = 0.0
     attnres_final_memory_delta_scale: float = 1.0
+    attnres_final_memory_query_cap: float = 0.0
+    attnres_final_memory_query_bias_init: float = 0.0
+    attnres_final_memory_query_delta_scale: float = 1.0
+    attnres_final_memory_q_mod_scale: float = 0.0
+    attnres_final_memory_k_mod_scale: float = 0.0
+    attnres_final_memory_v_mod_scale: float = 0.0
+    attnres_final_memory_logit_mod_scale: float = 0.0
+    attnres_final_memory_vres_scale: float = 0.0
     attnres_target_gate: float = 0.0
     attnres_target_gate_coef: float = 0.0
     permix_mode: str = "off"
@@ -615,6 +628,10 @@ class DepthSoftmaxMixer(nn.Module):
         extra_registers=None,
         extra_register_bias=None,
         extra_query=None,
+        source_logit_bias=None,
+        source_key_scale=None,
+        source_value_scale=None,
+        source_value_residual=None,
         extra_register_weight_cap=0.0,
     ):
         source_tensor = torch.stack(list(source_values), dim=0) if isinstance(source_values, (list, tuple)) else source_values
@@ -631,12 +648,32 @@ class DepthSoftmaxMixer(nn.Module):
             extra_register_count = int(extra_registers.size(0))
             source_tensor = torch.cat([source_tensor, extra_registers.to(dtype=source_tensor.dtype)], dim=0)
         normed_sources = self.key_norms[query_index](source_tensor)
+        value_residual_base = normed_sources.to(dtype=source_tensor.dtype)
+        mixed_source_tensor = source_tensor
+        if source_key_scale is not None:
+            key_scale = source_key_scale.to(dtype=normed_sources.dtype)
+            normed_sources = normed_sources * key_scale.unsqueeze(0)
+        if source_value_scale is not None:
+            value_scale = source_value_scale.to(dtype=source_tensor.dtype)
+            mixed_source_tensor = mixed_source_tensor * value_scale.unsqueeze(0)
+        if source_value_residual is not None:
+            value_residual = source_value_residual.to(dtype=source_tensor.dtype)
+            mixed_source_tensor = mixed_source_tensor + value_residual_base * value_residual.unsqueeze(0)
         query = self.queries[query_index].to(dtype=source_tensor.dtype)
         if extra_query is not None:
             query = query.view(*([1] * (extra_query.dim() - 1)), self.dim) + extra_query.to(dtype=source_tensor.dtype)
             logits = torch.einsum("...d,s...d->s...", query, normed_sources)
         else:
             logits = torch.einsum("d,s...d->s...", query, normed_sources)
+        if source_logit_bias is not None:
+            logit_bias = source_logit_bias.to(dtype=logits.dtype)
+            if logit_bias.dim() == 1:
+                view_shape = (num_real_sources,) + (1,) * (logits.dim() - 1)
+                logit_bias = logit_bias[:num_real_sources].view(view_shape)
+            else:
+                logit_bias = logit_bias[:num_real_sources]
+            logits = logits.clone()
+            logits[:num_real_sources] = logits[:num_real_sources] + logit_bias
         if active_registers and self.register_bias is not None:
             reg_bias = self.register_bias[query_index].to(dtype=logits.dtype)
             if self.runtime_register_bias_offset != 0.0:
@@ -681,13 +718,15 @@ class DepthSoftmaxMixer(nn.Module):
             pieces = []
             if before.numel() > 0:
                 pieces.append(before * non_extra_scale)
-            pieces.append(scaled_extra)
+                pieces.append(scaled_extra)
             if after.numel() > 0:
                 pieces.append(after * non_extra_scale)
             weights = torch.cat(pieces, dim=0)
-        mixed = torch.einsum("s...,s...d->...d", weights, source_tensor)
+        mixed = torch.einsum("s...,s...d->...d", weights, mixed_source_tensor)
         return mixed, weights, {
             "num_real_sources": num_real_sources,
+            "num_builtin_registers": self.num_registers if include_registers else 0,
+            "extra_register_count": extra_register_count,
             "num_registers": ((self.num_registers if include_registers else 0) + extra_register_count) if active_registers else 0,
         }
 
@@ -737,6 +776,10 @@ class FullAttnResMixer(nn.Module):
         extra_registers=None,
         extra_register_bias=None,
         extra_query=None,
+        source_logit_bias=None,
+        source_key_scale=None,
+        source_value_scale=None,
+        source_value_residual=None,
         extra_register_weight_cap=0.0,
     ):
         sources = [embedding, *prior_layer_outputs]
@@ -748,6 +791,10 @@ class FullAttnResMixer(nn.Module):
             extra_registers=extra_registers,
             extra_register_bias=extra_register_bias,
             extra_query=extra_query,
+            source_logit_bias=source_logit_bias,
+            source_key_scale=source_key_scale,
+            source_value_scale=source_value_scale,
+            source_value_residual=source_value_residual,
             extra_register_weight_cap=extra_register_weight_cap,
         )
 
@@ -759,6 +806,10 @@ class FullAttnResMixer(nn.Module):
         extra_registers=None,
         extra_register_bias=None,
         extra_query=None,
+        source_logit_bias=None,
+        source_key_scale=None,
+        source_value_scale=None,
+        source_value_residual=None,
         extra_register_weight_cap=0.0,
     ):
         sources = [embedding, *layer_outputs]
@@ -770,6 +821,10 @@ class FullAttnResMixer(nn.Module):
             extra_registers=extra_registers,
             extra_register_bias=extra_register_bias,
             extra_query=extra_query,
+            source_logit_bias=source_logit_bias,
+            source_key_scale=source_key_scale,
+            source_value_scale=source_value_scale,
+            source_value_residual=source_value_residual,
             extra_register_weight_cap=extra_register_weight_cap,
         )
 
@@ -852,6 +907,10 @@ class BlockAttnResMixer(nn.Module):
         extra_registers=None,
         extra_register_bias=None,
         extra_query=None,
+        source_logit_bias=None,
+        source_key_scale=None,
+        source_value_scale=None,
+        source_value_residual=None,
         extra_register_weight_cap=0.0,
     ):
         return self.mixer.mix_with_weights(
@@ -862,6 +921,10 @@ class BlockAttnResMixer(nn.Module):
             extra_registers=extra_registers,
             extra_register_bias=extra_register_bias,
             extra_query=extra_query,
+            source_logit_bias=source_logit_bias,
+            source_key_scale=source_key_scale,
+            source_value_scale=source_value_scale,
+            source_value_residual=source_value_residual,
             extra_register_weight_cap=extra_register_weight_cap,
         )
 
@@ -875,6 +938,10 @@ class BlockAttnResMixer(nn.Module):
         extra_registers=None,
         extra_register_bias=None,
         extra_query=None,
+        source_logit_bias=None,
+        source_key_scale=None,
+        source_value_scale=None,
+        source_value_residual=None,
         extra_register_weight_cap=0.0,
     ):
         return self.mixer.mix_with_weights(
@@ -885,6 +952,10 @@ class BlockAttnResMixer(nn.Module):
             extra_registers=extra_registers,
             extra_register_bias=extra_register_bias,
             extra_query=extra_query,
+            source_logit_bias=source_logit_bias,
+            source_key_scale=source_key_scale,
+            source_value_scale=source_value_scale,
+            source_value_residual=source_value_residual,
             extra_register_weight_cap=extra_register_weight_cap,
         )
 
@@ -1171,9 +1242,22 @@ class GPT(nn.Module):
         self.attnres_final_memory_scale = config.attnres_final_memory_scale
         self.attnres_final_memory_groups = config.attnres_final_memory_groups
         self.attnres_final_memory_rank = config.attnres_final_memory_rank
+        self.attnres_final_memory_residual_rank = config.attnres_final_memory_residual_rank
+        self.attnres_final_memory_residual_scale = config.attnres_final_memory_residual_scale
+        self.attnres_final_memory_bigram_buckets = config.attnres_final_memory_bigram_buckets
+        self.attnres_final_memory_bigram_banks = config.attnres_final_memory_bigram_banks
+        self.attnres_final_memory_bigram_scale = config.attnres_final_memory_bigram_scale
         self.attnres_final_memory_gate_cap = config.attnres_final_memory_gate_cap
         self.attnres_final_memory_gate_bias_init = config.attnres_final_memory_gate_bias_init
         self.attnres_final_memory_delta_scale = config.attnres_final_memory_delta_scale
+        self.attnres_final_memory_query_cap = config.attnres_final_memory_query_cap
+        self.attnres_final_memory_query_bias_init = config.attnres_final_memory_query_bias_init
+        self.attnres_final_memory_query_delta_scale = config.attnres_final_memory_query_delta_scale
+        self.attnres_final_memory_q_mod_scale = config.attnres_final_memory_q_mod_scale
+        self.attnres_final_memory_k_mod_scale = config.attnres_final_memory_k_mod_scale
+        self.attnres_final_memory_v_mod_scale = config.attnres_final_memory_v_mod_scale
+        self.attnres_final_memory_logit_mod_scale = config.attnres_final_memory_logit_mod_scale
+        self.attnres_final_memory_vres_scale = config.attnres_final_memory_vres_scale
         if self.attnres_register_scope not in {"all", "attn_only", "mlp_only", "final_only"}:
             raise ValueError(f"unknown attnres_register_scope: {self.attnres_register_scope}")
         if self.attnres_token_register_mode not in {"off", "shared", "query_local"}:
@@ -1186,9 +1270,25 @@ class GPT(nn.Module):
             raise ValueError(f"unknown attnres_token_query_mode: {self.attnres_token_query_mode}")
         if self.attnres_token_query_value_mode not in {"raw", "rmsnorm"}:
             raise ValueError(f"unknown attnres_token_query_value_mode: {self.attnres_token_query_value_mode}")
-        if self.attnres_final_memory_mode not in {"off", "static", "dynamic"}:
+        if self.attnres_final_memory_mode not in {
+            "off",
+            "static",
+            "dynamic",
+            "unified_static",
+            "unified_projected",
+            "query_static",
+            "query_projected",
+            "hybrid_static",
+            "hybrid_projected",
+            "modkv",
+            "modqkv",
+            "modlogit",
+            "modkvlogit",
+            "modqkvlogit",
+            "vres",
+        }:
             raise ValueError(f"unknown attnres_final_memory_mode: {self.attnres_final_memory_mode}")
-        if self.attnres_final_memory_source not in {"full", "factorized", "tied"}:
+        if self.attnres_final_memory_source not in {"full", "factorized", "tied", "tied_residual", "tied_bigram", "tied_bigram_only"}:
             raise ValueError(f"unknown attnres_final_memory_source: {self.attnres_final_memory_source}")
         if self.attnres_final_memory_value_mode not in {"raw", "rmsnorm"}:
             raise ValueError(f"unknown attnres_final_memory_value_mode: {self.attnres_final_memory_value_mode}")
@@ -1198,11 +1298,20 @@ class GPT(nn.Module):
             raise ValueError("n_embd must be divisible by attnres_final_memory_groups")
         if self.attnres_final_memory_source == "factorized" and self.attnres_final_memory_rank <= 0:
             raise ValueError("attnres_final_memory_rank must be > 0 for factorized final memory")
+        if self.attnres_final_memory_source == "tied_residual" and self.attnres_final_memory_residual_rank <= 0:
+            raise ValueError("attnres_final_memory_residual_rank must be > 0 for tied_residual final memory")
+        if self.attnres_final_memory_source in {"tied_bigram", "tied_bigram_only"} and self.attnres_final_memory_bigram_buckets <= 0:
+            raise ValueError("attnres_final_memory_bigram_buckets must be > 0 for tied_bigram final memory")
+        if self.attnres_final_memory_source in {"tied_bigram", "tied_bigram_only"} and self.attnres_final_memory_bigram_banks <= 0:
+            raise ValueError("attnres_final_memory_bigram_banks must be >= 1 for tied_bigram final memory")
         if self.attnres_final_memory_mode != "off":
             if self.attnres_token_registers > 0 or self.config.attnres_num_registers > 0:
                 raise ValueError("attnres_final_memory_mode requires attnres_token_registers=0 and attnres_num_registers=0")
             if self.attnres_token_query_mode != "off":
                 raise ValueError("attnres_final_memory_mode requires attnres_token_query_mode=off")
+        if self.attnres_final_memory_mode in {"unified_static", "unified_projected"}:
+            if self.attnres_final_memory_source not in {"tied", "tied_bigram", "tied_bigram_only"}:
+                raise ValueError("unified final memory mode currently supports tied/tied_bigram/tied_bigram_only sources only")
         if self.attnres_full_enabled:
             self.attnres_mixer = FullAttnResMixer(
                 num_logical_layers=self.attnres_num_logical_layers,
@@ -1285,21 +1394,87 @@ class GPT(nn.Module):
             elif self.attnres_final_memory_source == "factorized":
                 self.attnres_final_memory_embed = nn.Embedding(config.vocab_size, self.attnres_final_memory_rank)
                 self.attnres_final_memory_proj = nn.Linear(self.attnres_final_memory_rank, config.n_embd, bias=False)
+            elif self.attnres_final_memory_source == "tied_residual":
+                self.attnres_final_memory_embed = nn.Embedding(config.vocab_size, self.attnres_final_memory_residual_rank)
+                self.attnres_final_memory_proj = nn.Linear(self.attnres_final_memory_residual_rank, config.n_embd, bias=False)
+            elif self.attnres_final_memory_source in {"tied_bigram", "tied_bigram_only"}:
+                if self.attnres_final_memory_bigram_banks == 1:
+                    self.attnres_final_memory_embed = nn.Embedding(self.attnres_final_memory_bigram_buckets, config.n_embd)
+                else:
+                    self.attnres_final_memory_embed = nn.ModuleList([
+                        nn.Embedding(self.attnres_final_memory_bigram_buckets, config.n_embd)
+                        for _ in range(self.attnres_final_memory_bigram_banks)
+                    ])
+                self.attnres_final_memory_proj = None
             else:
                 self.attnres_final_memory_embed = None
                 self.attnres_final_memory_proj = None
-            self.attnres_final_memory_gate_bias = nn.Parameter(
-                torch.full((self.attnres_final_memory_groups,), float(config.attnres_final_memory_gate_bias_init))
-            )
-            if self.attnres_final_memory_mode == "dynamic":
+            if self.attnres_final_memory_mode in {"static", "dynamic", "query_static", "query_projected", "hybrid_static", "hybrid_projected"}:
+                self.attnres_final_memory_gate_bias = nn.Parameter(
+                    torch.full((self.attnres_final_memory_groups,), float(config.attnres_final_memory_gate_bias_init))
+                )
+            else:
+                self.attnres_final_memory_gate_bias = None
+            if self.attnres_final_memory_mode in {"dynamic", "query_projected"}:
                 self.attnres_final_memory_gate_proj = nn.Linear(config.n_embd, self.attnres_final_memory_groups, bias=False)
             else:
                 self.attnres_final_memory_gate_proj = None
+            if self.attnres_final_memory_mode in {"hybrid_static", "hybrid_projected"}:
+                self.attnres_final_memory_query_bias = nn.Parameter(
+                    torch.full((self.attnres_final_memory_groups,), float(config.attnres_final_memory_query_bias_init))
+                )
+            else:
+                self.attnres_final_memory_query_bias = None
+            if self.attnres_final_memory_mode == "hybrid_projected":
+                self.attnres_final_memory_query_proj = nn.Linear(config.n_embd, self.attnres_final_memory_groups, bias=False)
+            else:
+                self.attnres_final_memory_query_proj = None
+            if self.attnres_final_memory_mode in {"unified_static", "unified_projected"}:
+                self.attnres_final_memory_unified_bias = nn.Parameter(
+                    torch.full((self._attnres_num_final_memory_tokens(),), float(config.attnres_final_memory_gate_bias_init))
+                )
+            else:
+                self.attnres_final_memory_unified_bias = None
+            if self.attnres_final_memory_mode == "unified_projected":
+                self.attnres_final_memory_unified_proj = nn.Linear(
+                    config.n_embd, self._attnres_num_final_memory_tokens(), bias=False
+                )
+            else:
+                self.attnres_final_memory_unified_proj = None
+            if self.attnres_final_memory_mode in {"modqkv", "modqkvlogit"} and self.attnres_final_memory_q_mod_scale > 0:
+                self.attnres_final_memory_q_mod_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+            else:
+                self.attnres_final_memory_q_mod_proj = None
+            if self.attnres_final_memory_mode in {"modkv", "modqkv", "modkvlogit", "modqkvlogit"} and self.attnres_final_memory_k_mod_scale > 0:
+                self.attnres_final_memory_k_mod_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+            else:
+                self.attnres_final_memory_k_mod_proj = None
+            if self.attnres_final_memory_mode in {"modkv", "modqkv", "modkvlogit", "modqkvlogit"} and self.attnres_final_memory_v_mod_scale > 0:
+                self.attnres_final_memory_v_mod_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+            else:
+                self.attnres_final_memory_v_mod_proj = None
+            if self.attnres_final_memory_mode == "vres" and self.attnres_final_memory_vres_scale > 0:
+                self.attnres_final_memory_vres_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+            else:
+                self.attnres_final_memory_vres_proj = None
+            if self.attnres_final_memory_mode in {"modlogit", "modkvlogit", "modqkvlogit"} and self.attnres_final_memory_logit_mod_scale > 0:
+                self.attnres_final_memory_logit_mod_proj = nn.Linear(config.n_embd, self.attnres_num_logical_layers + 1, bias=False)
+            else:
+                self.attnres_final_memory_logit_mod_proj = None
         else:
             self.attnres_final_memory_embed = None
             self.attnres_final_memory_proj = None
             self.attnres_final_memory_gate_bias = None
             self.attnres_final_memory_gate_proj = None
+            self.attnres_final_memory_query_bias = None
+            self.attnres_final_memory_query_proj = None
+            self.attnres_final_memory_unified_bias = None
+            self.attnres_final_memory_unified_proj = None
+            self.attnres_final_memory_q_mod_proj = None
+            self.attnres_final_memory_k_mod_proj = None
+            self.attnres_final_memory_v_mod_proj = None
+            self.attnres_final_memory_vres_proj = None
+            self.attnres_final_memory_logit_mod_proj = None
         self.attnres_layers = nn.ModuleList(
             [AttentionResidual(config) for _ in range(config.n_layer)]
         ) if self.attnres_legacy_full_enabled else nn.ModuleList()
@@ -1325,6 +1500,7 @@ class GPT(nn.Module):
                 )
         self.last_permix_metrics = None
         self.last_attnres_metrics = None
+        self.last_attnres_grad_metrics = None
         self.last_diffattn_metrics = None
         self.last_moda_metrics = None
         self.last_anchorkv_metrics = None
@@ -1367,6 +1543,101 @@ class GPT(nn.Module):
 
     def _attnres_use_final_memory(self):
         return self.attnres_enabled and self.attnres_final_memory_mode != "off"
+
+    def _attnres_use_unified_final_memory(self):
+        return self.attnres_enabled and self.attnres_final_memory_mode in {"unified_static", "unified_projected"}
+
+    def _attnres_use_query_final_memory(self):
+        return self.attnres_enabled and self.attnres_final_memory_mode in {
+            "query_static",
+            "query_projected",
+            "hybrid_static",
+            "hybrid_projected",
+        }
+
+    def _attnres_use_blend_final_memory(self):
+        return self.attnres_enabled and self.attnres_final_memory_mode in {
+            "static",
+            "dynamic",
+            "hybrid_static",
+            "hybrid_projected",
+        }
+
+    def _attnres_use_modulated_final_memory(self):
+        return self.attnres_enabled and self.attnres_final_memory_mode in {
+            "modkv",
+            "modqkv",
+            "modlogit",
+            "modkvlogit",
+            "modqkvlogit",
+            "vres",
+        }
+
+    def _attnres_num_final_memory_tokens(self):
+        if self.attnres_final_memory_source == "tied":
+            return 1
+        if self.attnres_final_memory_source == "tied_bigram":
+            return 1 + self.attnres_final_memory_bigram_banks
+        if self.attnres_final_memory_source == "tied_bigram_only":
+            return self.attnres_final_memory_bigram_banks
+        return 1
+
+    def _attnres_final_memory_token_names(self):
+        if self.attnres_final_memory_source == "tied":
+            return ["unigram"]
+        if self.attnres_final_memory_source == "tied_bigram":
+            return ["unigram", *[f"bigram_bank{i}" for i in range(self.attnres_final_memory_bigram_banks)]]
+        if self.attnres_final_memory_source == "tied_bigram_only":
+            return [f"bigram_bank{i}" for i in range(self.attnres_final_memory_bigram_banks)]
+        return ["memory"]
+
+    def _iter_attnres_final_memory_embeddings(self):
+        if self.attnres_final_memory_embed is None:
+            return
+        if isinstance(self.attnres_final_memory_embed, nn.Embedding):
+            yield self.attnres_final_memory_embed
+        else:
+            for emb in self.attnres_final_memory_embed:
+                yield emb
+
+    def _attnres_bigram_bucket_ids(self, idx, bank_index=0):
+        prev = torch.zeros_like(idx)
+        prev[:, 1:] = idx[:, :-1]
+        mul_a = 1315423911 + bank_index * 2246822519
+        mul_b = 2654435761 + bank_index * 3266489917
+        mixed = prev.long() * mul_a + idx.long() * mul_b
+        return torch.remainder(mixed, self.attnres_final_memory_bigram_buckets).to(dtype=torch.long)
+
+    def _build_attnres_final_memory_tokens(self, idx):
+        if not self._attnres_use_unified_final_memory():
+            return None
+        tokens = []
+        if self.attnres_final_memory_source in {"tied", "tied_bigram"}:
+            tokens.append(self.transformer.wte(idx))
+        if self.attnres_final_memory_source in {"tied_bigram", "tied_bigram_only"}:
+            if isinstance(self.attnres_final_memory_embed, nn.Embedding):
+                tokens.append(self.attnres_final_memory_embed(self._attnres_bigram_bucket_ids(idx, 0)))
+            else:
+                for bank_index, emb in enumerate(self.attnres_final_memory_embed):
+                    tokens.append(emb(self._attnres_bigram_bucket_ids(idx, bank_index)))
+        token_tensor = torch.stack(tokens, dim=0)
+        if self.attnres_final_memory_value_mode == "rmsnorm":
+            token_tensor = F.rms_norm(token_tensor.float(), (token_tensor.size(-1),)).to(dtype=token_tensor.dtype)
+        if self.attnres_final_memory_scale != 1.0:
+            token_tensor = token_tensor * token_tensor.new_tensor(self.attnres_final_memory_scale)
+        return token_tensor
+
+    def _build_attnres_final_memory_unified_bias(self, query_input):
+        if not self._attnres_use_unified_final_memory():
+            return None
+        bias = self.attnres_final_memory_unified_bias
+        if self.attnres_final_memory_mode == "unified_projected":
+            proj_input = F.rms_norm(query_input.float(), (query_input.size(-1),))
+            delta = self.attnres_final_memory_unified_proj(proj_input)
+            if self.attnres_final_memory_delta_scale != 1.0:
+                delta = delta * delta.new_tensor(self.attnres_final_memory_delta_scale)
+            return bias.view(-1, 1, 1).to(dtype=query_input.dtype) + delta.permute(2, 0, 1).to(dtype=query_input.dtype)
+        return bias
 
     def _attnres_set_runtime_step(self, step):
         if self.attnres_mixer is not None:
@@ -1418,16 +1689,127 @@ class GPT(nn.Module):
             memory = self.attnres_final_memory_embed(idx)
         elif self.attnres_final_memory_source == "factorized":
             memory = self.attnres_final_memory_proj(self.attnres_final_memory_embed(idx))
-        else:
+        elif self.attnres_final_memory_source == "tied":
             memory = self.transformer.wte(idx)
+        elif self.attnres_final_memory_source == "tied_residual":
+            memory = self.transformer.wte(idx)
+            residual = self.attnres_final_memory_proj(self.attnres_final_memory_embed(idx))
+            if self.attnres_final_memory_residual_scale != 1.0:
+                residual = residual * residual.new_tensor(self.attnres_final_memory_residual_scale)
+            memory = memory + residual
+        elif self.attnres_final_memory_source in {"tied_bigram", "tied_bigram_only"}:
+            memory = self.transformer.wte(idx) if self.attnres_final_memory_source == "tied_bigram" else torch.zeros_like(self.transformer.wte(idx))
+            if isinstance(self.attnres_final_memory_embed, nn.Embedding):
+                bigram = self.attnres_final_memory_embed(self._attnres_bigram_bucket_ids(idx, 0))
+            else:
+                bigram = torch.zeros_like(memory)
+                for bank_index, emb in enumerate(self.attnres_final_memory_embed):
+                    bigram = bigram + emb(self._attnres_bigram_bucket_ids(idx, bank_index))
+            if self.attnres_final_memory_bigram_scale != 1.0:
+                bigram = bigram * bigram.new_tensor(self.attnres_final_memory_bigram_scale)
+            memory = memory + bigram
+        else:
+            raise ValueError(f"unknown attnres_final_memory_source: {self.attnres_final_memory_source}")
         if self.attnres_final_memory_value_mode == "rmsnorm":
             memory = F.rms_norm(memory.float(), (memory.size(-1),)).to(dtype=memory.dtype)
         if self.attnres_final_memory_scale != 1.0:
             memory = memory * memory.new_tensor(self.attnres_final_memory_scale)
         return memory
 
+    def _build_attnres_final_memory_query(self, idx, gate_input):
+        if not self._attnres_use_query_final_memory():
+            return None, None
+        memory = self._build_attnres_final_memory(idx)
+        B, T, D = memory.shape
+        G = self.attnres_final_memory_groups
+        group_dim = D // G
+        memory_groups = memory.view(B, T, G, group_dim)
+        if self.attnres_final_memory_mode in {"hybrid_static", "hybrid_projected"}:
+            gate_logit = self.attnres_final_memory_query_bias.to(dtype=memory.dtype).view(1, 1, G).expand(B, T, G)
+            query_cap = self.attnres_final_memory_query_cap
+            query_delta_scale = self.attnres_final_memory_query_delta_scale
+            query_proj = self.attnres_final_memory_query_proj
+            use_projected = self.attnres_final_memory_mode == "hybrid_projected"
+        else:
+            gate_logit = self.attnres_final_memory_gate_bias.to(dtype=memory.dtype).view(1, 1, G).expand(B, T, G)
+            query_cap = self.attnres_final_memory_gate_cap
+            query_delta_scale = self.attnres_final_memory_delta_scale
+            query_proj = self.attnres_final_memory_gate_proj
+            use_projected = self.attnres_final_memory_mode == "query_projected"
+        gate_delta = None
+        if use_projected:
+            if gate_input is None:
+                gate_input = memory
+            proj_input = F.rms_norm(gate_input.float(), (gate_input.size(-1),))
+            gate_delta = query_proj(proj_input)
+            if query_delta_scale != 1.0:
+                gate_delta = gate_delta * gate_delta.new_tensor(query_delta_scale)
+            gate_logit = gate_logit + gate_delta.to(dtype=gate_logit.dtype)
+        gate = torch.sigmoid(gate_logit).unsqueeze(-1)
+        if query_cap > 0:
+            gate = gate * gate.new_tensor(query_cap)
+        query = (memory_groups * gate.to(dtype=memory.dtype)).reshape(B, T, D)
+        gate_scalar = gate.squeeze(-1)
+        stats = {
+            "final_memory_query_gate": gate_scalar.mean().detach(),
+            "final_memory_query_gate_std": gate_scalar.std(unbiased=False).detach(),
+            "final_memory_query_norm": query.float().norm(dim=-1).mean().detach(),
+            "final_memory_query_rms": query.float().pow(2).mean(dim=-1).sqrt().mean().detach(),
+            "final_memory_rms": memory.float().pow(2).mean(dim=-1).sqrt().mean().detach(),
+        }
+        if gate_delta is not None:
+            stats["final_memory_query_delta_norm"] = gate_delta.float().norm(dim=-1).mean().detach()
+        return query.to(dtype=memory.dtype), stats
+
+    def _build_attnres_final_memory_modulation(self, idx):
+        if not self._attnres_use_modulated_final_memory():
+            return None, None, None, None, None, None
+        memory = self._build_attnres_final_memory(idx)
+        mod_input = F.rms_norm(memory.float(), (memory.size(-1),))
+        q_delta = None
+        logit_bias = None
+        key_scale = None
+        value_scale = None
+        value_residual = None
+        stats = {
+            "final_memory_rms": memory.float().pow(2).mean(dim=-1).sqrt().mean().detach(),
+        }
+        if self.attnres_final_memory_q_mod_proj is not None:
+            q_delta = torch.tanh(self.attnres_final_memory_q_mod_proj(mod_input))
+            q_delta = q_delta * q_delta.new_tensor(self.attnres_final_memory_q_mod_scale)
+            stats["final_memory_mod_q_delta_norm"] = q_delta.float().norm(dim=-1).mean().detach()
+        if self.attnres_final_memory_k_mod_proj is not None:
+            key_delta = torch.tanh(self.attnres_final_memory_k_mod_proj(mod_input))
+            key_delta = key_delta * key_delta.new_tensor(self.attnres_final_memory_k_mod_scale)
+            key_scale = 1.0 + key_delta
+            stats["final_memory_mod_k_delta_norm"] = key_delta.float().norm(dim=-1).mean().detach()
+            stats["final_memory_mod_k_scale_mean"] = key_scale.float().mean().detach()
+        if self.attnres_final_memory_v_mod_proj is not None:
+            value_delta = torch.tanh(self.attnres_final_memory_v_mod_proj(mod_input))
+            value_delta = value_delta * value_delta.new_tensor(self.attnres_final_memory_v_mod_scale)
+            value_scale = 1.0 + value_delta
+            stats["final_memory_mod_v_delta_norm"] = value_delta.float().norm(dim=-1).mean().detach()
+            stats["final_memory_mod_v_scale_mean"] = value_scale.float().mean().detach()
+        if self.attnres_final_memory_vres_proj is not None:
+            value_residual = torch.tanh(self.attnres_final_memory_vres_proj(mod_input))
+            value_residual = value_residual * value_residual.new_tensor(self.attnres_final_memory_vres_scale)
+            stats["final_memory_vres_delta_norm"] = value_residual.float().norm(dim=-1).mean().detach()
+        if self.attnres_final_memory_logit_mod_proj is not None:
+            logit_delta = torch.tanh(self.attnres_final_memory_logit_mod_proj(mod_input))
+            logit_delta = logit_delta * logit_delta.new_tensor(self.attnres_final_memory_logit_mod_scale)
+            logit_bias = logit_delta.permute(2, 0, 1)
+            stats["final_memory_mod_logit_delta_norm"] = logit_delta.float().norm(dim=-1).mean().detach()
+        return (
+            q_delta.to(dtype=memory.dtype) if q_delta is not None else None,
+            logit_bias.to(dtype=memory.dtype) if logit_bias is not None else None,
+            key_scale.to(dtype=memory.dtype) if key_scale is not None else None,
+            value_scale.to(dtype=memory.dtype) if value_scale is not None else None,
+            value_residual.to(dtype=memory.dtype) if value_residual is not None else None,
+            stats,
+        )
+
     def _apply_attnres_final_memory(self, idx, x, gate_input=None):
-        if not self._attnres_use_final_memory():
+        if not self._attnres_use_blend_final_memory():
             return x, None
         memory = self._build_attnres_final_memory(idx).to(dtype=x.dtype)
         B, T, D = x.shape
@@ -1456,12 +1838,25 @@ class GPT(nn.Module):
             "final_memory_gate_std": gate_scalar.std(unbiased=False).detach(),
             "final_memory_groups": gate_scalar.new_tensor(float(G)).detach(),
             "final_memory_source": gate_scalar.new_tensor(
-                {"full": 0.0, "factorized": 1.0, "tied": 2.0}[self.attnres_final_memory_source]
+                {"full": 0.0, "factorized": 1.0, "tied": 2.0, "tied_residual": 3.0, "tied_bigram": 4.0, "tied_bigram_only": 5.0}[self.attnres_final_memory_source]
             ).detach(),
             "final_memory_delta_norm": (mixed.float() - x.float()).norm(dim=-1).mean().detach(),
             "final_memory_rms": memory.float().pow(2).mean(dim=-1).sqrt().mean().detach(),
         }
         return mixed, stats
+
+    def _summarize_attnres_extra_source_weights(self, weights, meta, names):
+        extra_count = int(meta.get("extra_register_count", 0))
+        if extra_count <= 0:
+            return {}
+        start = int(meta.get("num_real_sources", 0)) + int(meta.get("num_builtin_registers", 0))
+        extra = weights[start:start + extra_count]
+        stats = {
+            "memory_total": extra.sum(dim=0).mean(),
+        }
+        for i, name in enumerate(names[:extra_count]):
+            stats[f"memory_{name}"] = extra[i].mean()
+        return stats
 
     def _build_attnres_token_query(self, idx, query_index):
         if not self.attnres_enabled or self.attnres_token_query_mode == "off":
@@ -1529,16 +1924,36 @@ class GPT(nn.Module):
                 torch.nn.init.normal_(emb.weight, mean=0.0, std=0.02)
             for emb in self._iter_attnres_token_query_embeddings():
                 torch.nn.init.normal_(emb.weight, mean=0.0, std=0.02)
-            if self.attnres_final_memory_embed is not None:
-                torch.nn.init.normal_(self.attnres_final_memory_embed.weight, mean=0.0, std=0.02)
+            for emb in self._iter_attnres_final_memory_embeddings():
+                if self.attnres_final_memory_source in {"tied_residual", "tied_bigram", "tied_bigram_only"}:
+                    torch.nn.init.zeros_(emb.weight)
+                else:
+                    torch.nn.init.normal_(emb.weight, mean=0.0, std=0.02)
             if self.attnres_final_memory_proj is not None:
-                torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=0.02)
+                if self.attnres_final_memory_source == "tied_residual":
+                    torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=0.02)
+                else:
+                    torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=0.02)
             if self.attnres_final_memory_gate_bias is not None:
                 self.attnres_final_memory_gate_bias.fill_(self.attnres_final_memory_gate_bias_init)
             for proj in self.attnres_token_register_bias_proj:
                 torch.nn.init.zeros_(proj.weight)
             if self.attnres_final_memory_gate_proj is not None:
                 torch.nn.init.zeros_(self.attnres_final_memory_gate_proj.weight)
+            if self.attnres_final_memory_unified_bias is not None:
+                self.attnres_final_memory_unified_bias.fill_(self.attnres_final_memory_gate_bias_init)
+            if self.attnres_final_memory_unified_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_unified_proj.weight)
+            if self.attnres_final_memory_q_mod_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_q_mod_proj.weight)
+            if self.attnres_final_memory_k_mod_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_k_mod_proj.weight)
+            if self.attnres_final_memory_v_mod_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_v_mod_proj.weight)
+            if self.attnres_final_memory_vres_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_vres_proj.weight)
+            if self.attnres_final_memory_logit_mod_proj is not None:
+                torch.nn.init.zeros_(self.attnres_final_memory_logit_mod_proj.weight)
             proj_std = 0.02 / math.sqrt(2 * self.config.n_layer)
             for block in self.transformer.h:
                 torch.nn.init.normal_(block.attn.c_q.weight, mean=0.0, std=0.02)
@@ -1571,10 +1986,12 @@ class GPT(nn.Module):
                 emb.to(dtype=torch.bfloat16)
             for emb in self._iter_attnres_token_query_embeddings():
                 emb.to(dtype=torch.bfloat16)
-            if self.attnres_final_memory_embed is not None:
-                self.attnres_final_memory_embed.to(dtype=torch.bfloat16)
+            for emb in self._iter_attnres_final_memory_embeddings():
+                emb.to(dtype=torch.bfloat16)
             if self.attnres_final_memory_proj is not None:
                 self.attnres_final_memory_proj.to(dtype=torch.bfloat16)
+            if self.attnres_final_memory_unified_proj is not None:
+                self.attnres_final_memory_unified_proj.to(dtype=torch.bfloat16)
             return
 
         # Embedding and unembedding
@@ -1584,16 +2001,32 @@ class GPT(nn.Module):
             torch.nn.init.normal_(emb.weight, mean=0.0, std=1.0)
         for emb in self._iter_attnres_token_query_embeddings():
             torch.nn.init.normal_(emb.weight, mean=0.0, std=1.0)
-        if self.attnres_final_memory_embed is not None:
-            torch.nn.init.normal_(self.attnres_final_memory_embed.weight, mean=0.0, std=1.0)
+        for emb in self._iter_attnres_final_memory_embeddings():
+            if self.attnres_final_memory_source in {"tied_residual", "tied_bigram", "tied_bigram_only"}:
+                torch.nn.init.zeros_(emb.weight)
+            else:
+                torch.nn.init.normal_(emb.weight, mean=0.0, std=1.0)
         if self.attnres_final_memory_proj is not None:
-            torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=1.0)
+            if self.attnres_final_memory_source == "tied_residual":
+                torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=1.0)
+            else:
+                torch.nn.init.normal_(self.attnres_final_memory_proj.weight, mean=0.0, std=1.0)
         if self.attnres_final_memory_gate_bias is not None:
             self.attnres_final_memory_gate_bias.fill_(self.attnres_final_memory_gate_bias_init)
         for proj in self.attnres_token_register_bias_proj:
             torch.nn.init.zeros_(proj.weight)
         if self.attnres_final_memory_gate_proj is not None:
             torch.nn.init.zeros_(self.attnres_final_memory_gate_proj.weight)
+        if self.attnres_final_memory_unified_bias is not None:
+            self.attnres_final_memory_unified_bias.fill_(self.attnres_final_memory_gate_bias_init)
+        if self.attnres_final_memory_unified_proj is not None:
+            torch.nn.init.zeros_(self.attnres_final_memory_unified_proj.weight)
+        if self.attnres_final_memory_q_mod_proj is not None:
+            torch.nn.init.zeros_(self.attnres_final_memory_q_mod_proj.weight)
+        if self.attnres_final_memory_k_mod_proj is not None:
+            torch.nn.init.zeros_(self.attnres_final_memory_k_mod_proj.weight)
+        if self.attnres_final_memory_v_mod_proj is not None:
+            torch.nn.init.zeros_(self.attnres_final_memory_v_mod_proj.weight)
         # Transformer blocks
         n_embd = self.config.n_embd
         s = 3**0.5 * n_embd**-0.5
@@ -1653,10 +2086,22 @@ class GPT(nn.Module):
             emb.to(dtype=torch.bfloat16)
         for emb in self._iter_attnres_token_query_embeddings():
             emb.to(dtype=torch.bfloat16)
-        if self.attnres_final_memory_embed is not None:
-            self.attnres_final_memory_embed.to(dtype=torch.bfloat16)
+        for emb in self._iter_attnres_final_memory_embeddings():
+            emb.to(dtype=torch.bfloat16)
         if self.attnres_final_memory_proj is not None:
             self.attnres_final_memory_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_unified_proj is not None:
+            self.attnres_final_memory_unified_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_q_mod_proj is not None:
+            self.attnres_final_memory_q_mod_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_k_mod_proj is not None:
+            self.attnres_final_memory_k_mod_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_v_mod_proj is not None:
+            self.attnres_final_memory_v_mod_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_vres_proj is not None:
+            self.attnres_final_memory_vres_proj.to(dtype=torch.bfloat16)
+        if self.attnres_final_memory_logit_mod_proj is not None:
+            self.attnres_final_memory_logit_mod_proj.to(dtype=torch.bfloat16)
         if "wpe" in self.transformer:
             self.transformer.wpe.to(dtype=torch.bfloat16)
         for ve in self.value_embeds.values():
@@ -1687,7 +2132,14 @@ class GPT(nn.Module):
         window_sizes[-1] = (long_window, 0)
         return window_sizes
 
-    def _summarize_attnres_weights(self, weights, num_real_sources=None, num_registers=0):
+    def _summarize_attnres_weights(
+        self,
+        weights,
+        num_real_sources=None,
+        num_registers=0,
+        num_builtin_registers=0,
+        extra_register_count=0,
+    ):
         weights_f = weights.float()
         if torch.any(weights_f < 0):
             stats_weights = weights_f.abs() / weights_f.abs().sum(dim=0, keepdim=True).clamp_min(1e-9)
@@ -1706,6 +2158,71 @@ class GPT(nn.Module):
             "entropy": entropy,
             "register": register_mass,
         }
+
+    def _grad_norm_sq(self, param):
+        if param is None or param.grad is None:
+            return None
+        return param.grad.detach().float().pow(2).sum()
+
+    def _module_grad_norm_sq(self, module):
+        if module is None:
+            return None
+        total = None
+        for p in module.parameters():
+            sq = self._grad_norm_sq(p)
+            if sq is not None:
+                total = sq if total is None else (total + sq)
+        return total
+
+    def collect_attnres_grad_metrics(self):
+        metrics = {}
+        wte_sq = self._grad_norm_sq(self.transformer.wte.weight)
+        if wte_sq is not None:
+            metrics["wte_grad_norm"] = wte_sq.sqrt()
+        total_embed_sq = None
+        for emb in self._iter_attnres_final_memory_embeddings():
+            sq = self._grad_norm_sq(emb.weight)
+            if sq is not None:
+                total_embed_sq = sq if total_embed_sq is None else (total_embed_sq + sq)
+        if total_embed_sq is not None:
+            metrics["final_memory_embed_grad_norm"] = total_embed_sq.sqrt()
+        proj_sq = self._module_grad_norm_sq(self.attnres_final_memory_proj)
+        if proj_sq is not None:
+            metrics["final_memory_proj_grad_norm"] = proj_sq.sqrt()
+        gate_bias_sq = self._grad_norm_sq(self.attnres_final_memory_gate_bias)
+        if gate_bias_sq is not None:
+            metrics["final_memory_gate_bias_grad_norm"] = gate_bias_sq.sqrt()
+        gate_proj_sq = self._module_grad_norm_sq(self.attnres_final_memory_gate_proj)
+        if gate_proj_sq is not None:
+            metrics["final_memory_gate_proj_grad_norm"] = gate_proj_sq.sqrt()
+        query_bias_sq = self._grad_norm_sq(self.attnres_final_memory_query_bias)
+        if query_bias_sq is not None:
+            metrics["final_memory_query_bias_grad_norm"] = query_bias_sq.sqrt()
+        query_proj_sq = self._module_grad_norm_sq(self.attnres_final_memory_query_proj)
+        if query_proj_sq is not None:
+            metrics["final_memory_query_proj_grad_norm"] = query_proj_sq.sqrt()
+        unified_bias_sq = self._grad_norm_sq(self.attnres_final_memory_unified_bias)
+        if unified_bias_sq is not None:
+            metrics["final_memory_unified_bias_grad_norm"] = unified_bias_sq.sqrt()
+        unified_proj_sq = self._module_grad_norm_sq(self.attnres_final_memory_unified_proj)
+        if unified_proj_sq is not None:
+            metrics["final_memory_unified_proj_grad_norm"] = unified_proj_sq.sqrt()
+        q_mod_sq = self._module_grad_norm_sq(self.attnres_final_memory_q_mod_proj)
+        if q_mod_sq is not None:
+            metrics["final_memory_q_mod_proj_grad_norm"] = q_mod_sq.sqrt()
+        k_mod_sq = self._module_grad_norm_sq(self.attnres_final_memory_k_mod_proj)
+        if k_mod_sq is not None:
+            metrics["final_memory_k_mod_proj_grad_norm"] = k_mod_sq.sqrt()
+        v_mod_sq = self._module_grad_norm_sq(self.attnres_final_memory_v_mod_proj)
+        if v_mod_sq is not None:
+            metrics["final_memory_v_mod_proj_grad_norm"] = v_mod_sq.sqrt()
+        vres_sq = self._module_grad_norm_sq(self.attnres_final_memory_vres_proj)
+        if vres_sq is not None:
+            metrics["final_memory_vres_proj_grad_norm"] = vres_sq.sqrt()
+        logit_mod_sq = self._module_grad_norm_sq(self.attnres_final_memory_logit_mod_proj)
+        if logit_mod_sq is not None:
+            metrics["final_memory_logit_mod_proj_grad_norm"] = logit_mod_sq.sqrt()
+        return metrics or None
 
     def _forward_full_attnres_hidden(self, idx, embedding, cos_sin):
         logical_outputs = []
@@ -1756,17 +2273,60 @@ class GPT(nn.Module):
         final_bias_input = logical_outputs[-1] if logical_outputs else embedding
         final_extra_registers, final_extra_bias = self._build_attnres_token_registers(idx, self.attnres_num_logical_layers, bias_input=final_bias_input)
         final_extra_query = self._build_attnres_token_query(idx, self.attnres_num_logical_layers)
+        final_query_stats = None
+        final_source_logit_bias = None
+        final_source_key_scale = None
+        final_source_value_scale = None
+        final_source_value_residual = None
+        final_mod_stats = None
+        if self._attnres_use_unified_final_memory():
+            final_extra_registers = self._build_attnres_final_memory_tokens(idx)
+            final_extra_bias = self._build_attnres_final_memory_unified_bias(final_bias_input)
+            final_extra_query = None
+        elif self._attnres_use_query_final_memory():
+            final_extra_query, final_query_stats = self._build_attnres_final_memory_query(idx, final_bias_input)
+        elif self._attnres_use_modulated_final_memory():
+            (
+                final_extra_query,
+                final_source_logit_bias,
+                final_source_key_scale,
+                final_source_value_scale,
+                final_source_value_residual,
+                final_mod_stats,
+            ) = self._build_attnres_final_memory_modulation(idx)
+        final_include_registers = self._attnres_use_registers("final_only") or self._attnres_use_unified_final_memory()
         x, final_weights, final_meta = self.attnres_mixer.final_output_with_weights(
             embedding=embedding,
             layer_outputs=logical_outputs,
-            include_registers=self._attnres_use_registers("final_only"),
+            include_registers=final_include_registers,
             extra_registers=final_extra_registers,
             extra_register_bias=final_extra_bias,
             extra_query=final_extra_query,
-            extra_register_weight_cap=self.attnres_token_register_weight_cap,
+            source_logit_bias=final_source_logit_bias,
+            source_key_scale=final_source_key_scale,
+            source_value_scale=final_source_value_scale,
+            source_value_residual=final_source_value_residual,
+            extra_register_weight_cap=self.attnres_final_memory_gate_cap if self._attnres_use_unified_final_memory() else self.attnres_token_register_weight_cap,
         )
         final_stats = self._summarize_attnres_weights(final_weights, **final_meta)
-        x, final_memory_stats = self._apply_attnres_final_memory(idx, x, gate_input=x)
+        if self._attnres_use_unified_final_memory():
+            final_memory_stats = self._summarize_attnres_extra_source_weights(
+                final_weights,
+                final_meta,
+                self._attnres_final_memory_token_names(),
+            )
+        elif self._attnres_use_blend_final_memory():
+            blend_input = x
+            x, blend_stats = self._apply_attnres_final_memory(idx, x, gate_input=blend_input)
+            final_memory_stats = {}
+            if final_query_stats is not None:
+                final_memory_stats.update(final_query_stats)
+            if blend_stats is not None:
+                final_memory_stats.update(blend_stats)
+            if not final_memory_stats:
+                final_memory_stats = None
+        else:
+            final_memory_stats = final_query_stats if final_query_stats is not None else final_mod_stats
         return x, input_stats, final_stats, final_memory_stats
 
     def _forward_block_attnres_hidden(self, idx, embedding, cos_sin):
@@ -1817,16 +2377,59 @@ class GPT(nn.Module):
         final_bias_input = state.final_sources()[-1]
         final_extra_registers, final_extra_bias = self._build_attnres_token_registers(idx, self.attnres_num_logical_layers, bias_input=final_bias_input)
         final_extra_query = self._build_attnres_token_query(idx, self.attnres_num_logical_layers)
+        final_query_stats = None
+        final_source_logit_bias = None
+        final_source_key_scale = None
+        final_source_value_scale = None
+        final_source_value_residual = None
+        final_mod_stats = None
+        if self._attnres_use_unified_final_memory():
+            final_extra_registers = self._build_attnres_final_memory_tokens(idx)
+            final_extra_bias = self._build_attnres_final_memory_unified_bias(final_bias_input)
+            final_extra_query = None
+        elif self._attnres_use_query_final_memory():
+            final_extra_query, final_query_stats = self._build_attnres_final_memory_query(idx, final_bias_input)
+        elif self._attnres_use_modulated_final_memory():
+            (
+                final_extra_query,
+                final_source_logit_bias,
+                final_source_key_scale,
+                final_source_value_scale,
+                final_source_value_residual,
+                final_mod_stats,
+            ) = self._build_attnres_final_memory_modulation(idx)
+        final_include_registers = self._attnres_use_registers("final_only") or self._attnres_use_unified_final_memory()
         x, final_weights, final_meta = self.attnres_mixer.final_output_with_weights(
             state,
-            include_registers=self._attnres_use_registers("final_only"),
+            include_registers=final_include_registers,
             extra_registers=final_extra_registers,
             extra_register_bias=final_extra_bias,
             extra_query=final_extra_query,
-            extra_register_weight_cap=self.attnres_token_register_weight_cap,
+            source_logit_bias=final_source_logit_bias,
+            source_key_scale=final_source_key_scale,
+            source_value_scale=final_source_value_scale,
+            source_value_residual=final_source_value_residual,
+            extra_register_weight_cap=self.attnres_final_memory_gate_cap if self._attnres_use_unified_final_memory() else self.attnres_token_register_weight_cap,
         )
         final_stats = self._summarize_attnres_weights(final_weights, **final_meta)
-        x, final_memory_stats = self._apply_attnres_final_memory(idx, x, gate_input=x)
+        if self._attnres_use_unified_final_memory():
+            final_memory_stats = self._summarize_attnres_extra_source_weights(
+                final_weights,
+                final_meta,
+                self._attnres_final_memory_token_names(),
+            )
+        elif self._attnres_use_blend_final_memory():
+            blend_input = x
+            x, blend_stats = self._apply_attnres_final_memory(idx, x, gate_input=blend_input)
+            final_memory_stats = {}
+            if final_query_stats is not None:
+                final_memory_stats.update(final_query_stats)
+            if blend_stats is not None:
+                final_memory_stats.update(blend_stats)
+            if not final_memory_stats:
+                final_memory_stats = None
+        else:
+            final_memory_stats = final_query_stats if final_query_stats is not None else final_mod_stats
         return x, input_stats, final_stats, final_memory_stats
 
     def estimate_flops(self):
@@ -1867,6 +2470,24 @@ class GPT(nn.Module):
             attnres_params.append(self.attnres_final_memory_gate_bias)
         if self.attnres_final_memory_gate_proj is not None:
             attnres_params.extend(list(self.attnres_final_memory_gate_proj.parameters()))
+        if self.attnres_final_memory_query_bias is not None:
+            attnres_params.append(self.attnres_final_memory_query_bias)
+        if self.attnres_final_memory_query_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_query_proj.parameters()))
+        if self.attnres_final_memory_unified_bias is not None:
+            attnres_params.append(self.attnres_final_memory_unified_bias)
+        if self.attnres_final_memory_unified_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_unified_proj.parameters()))
+        if self.attnres_final_memory_q_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_q_mod_proj.parameters()))
+        if self.attnres_final_memory_k_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_k_mod_proj.parameters()))
+        if self.attnres_final_memory_v_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_v_mod_proj.parameters()))
+        if self.attnres_final_memory_vres_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_vres_proj.parameters()))
+        if self.attnres_final_memory_logit_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_logit_mod_proj.parameters()))
         moda_params = []
         anchorkv_params = []
         for block in self.transformer.h:
@@ -1955,6 +2576,20 @@ class GPT(nn.Module):
             attnres_params.append(self.attnres_final_memory_gate_bias)
         if self.attnres_final_memory_gate_proj is not None:
             attnres_params.extend(list(self.attnres_final_memory_gate_proj.parameters()))
+        if self.attnres_final_memory_unified_bias is not None:
+            attnres_params.append(self.attnres_final_memory_unified_bias)
+        if self.attnres_final_memory_unified_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_unified_proj.parameters()))
+        if self.attnres_final_memory_q_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_q_mod_proj.parameters()))
+        if self.attnres_final_memory_k_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_k_mod_proj.parameters()))
+        if self.attnres_final_memory_v_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_v_mod_proj.parameters()))
+        if self.attnres_final_memory_vres_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_vres_proj.parameters()))
+        if self.attnres_final_memory_logit_mod_proj is not None:
+            attnres_params.extend(list(self.attnres_final_memory_logit_mod_proj.parameters()))
         moda_params = []
         anchorkv_params = []
         for block in self.transformer.h:
@@ -2454,9 +3089,22 @@ ATTNRES_FINAL_MEMORY_VALUE_MODE = env_str("AUTORESEARCH_ATTNRES_FINAL_MEMORY_VAL
 ATTNRES_FINAL_MEMORY_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE", 1.0)
 ATTNRES_FINAL_MEMORY_GROUPS = env_int("AUTORESEARCH_ATTNRES_FINAL_MEMORY_GROUPS", 1)
 ATTNRES_FINAL_MEMORY_RANK = env_int("AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK", 0)
+ATTNRES_FINAL_MEMORY_RESIDUAL_RANK = env_int("AUTORESEARCH_ATTNRES_FINAL_MEMORY_RESIDUAL_RANK", 0)
+ATTNRES_FINAL_MEMORY_RESIDUAL_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_RESIDUAL_SCALE", 1.0)
+ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS = env_int("AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS", 0)
+ATTNRES_FINAL_MEMORY_BIGRAM_BANKS = env_int("AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS", 1)
+ATTNRES_FINAL_MEMORY_BIGRAM_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_SCALE", 1.0)
 ATTNRES_FINAL_MEMORY_GATE_CAP = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP", 0.0)
 ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT", 0.0)
 ATTNRES_FINAL_MEMORY_DELTA_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_DELTA_SCALE", 1.0)
+ATTNRES_FINAL_MEMORY_QUERY_CAP = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_QUERY_CAP", 0.0)
+ATTNRES_FINAL_MEMORY_QUERY_BIAS_INIT = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_QUERY_BIAS_INIT", 0.0)
+ATTNRES_FINAL_MEMORY_QUERY_DELTA_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_QUERY_DELTA_SCALE", 1.0)
+ATTNRES_FINAL_MEMORY_Q_MOD_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_Q_MOD_SCALE", 0.0)
+ATTNRES_FINAL_MEMORY_K_MOD_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_K_MOD_SCALE", 0.0)
+ATTNRES_FINAL_MEMORY_V_MOD_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_V_MOD_SCALE", 0.0)
+ATTNRES_FINAL_MEMORY_LOGIT_MOD_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_LOGIT_MOD_SCALE", 0.0)
+ATTNRES_FINAL_MEMORY_VRES_SCALE = env_float("AUTORESEARCH_ATTNRES_FINAL_MEMORY_VRES_SCALE", 0.0)
 PERMIX_MODE = env_str("AUTORESEARCH_PERMIX_MODE", "off").lower() # off | skip
 PERMIX_SKIP_DETACH = env_flag("AUTORESEARCH_PERMIX_SKIP_DETACH", True)
 PERMIX_SKIP_EMA = env_float("AUTORESEARCH_PERMIX_SKIP_EMA", 0.5)
@@ -2589,9 +3237,22 @@ def build_model_config(depth, vocab_size):
         attnres_final_memory_scale=ATTNRES_FINAL_MEMORY_SCALE,
         attnres_final_memory_groups=ATTNRES_FINAL_MEMORY_GROUPS,
         attnres_final_memory_rank=ATTNRES_FINAL_MEMORY_RANK,
+        attnres_final_memory_residual_rank=ATTNRES_FINAL_MEMORY_RESIDUAL_RANK,
+        attnres_final_memory_residual_scale=ATTNRES_FINAL_MEMORY_RESIDUAL_SCALE,
+        attnres_final_memory_bigram_buckets=ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS,
+        attnres_final_memory_bigram_banks=ATTNRES_FINAL_MEMORY_BIGRAM_BANKS,
+        attnres_final_memory_bigram_scale=ATTNRES_FINAL_MEMORY_BIGRAM_SCALE,
         attnres_final_memory_gate_cap=ATTNRES_FINAL_MEMORY_GATE_CAP,
         attnres_final_memory_gate_bias_init=ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT,
         attnres_final_memory_delta_scale=ATTNRES_FINAL_MEMORY_DELTA_SCALE,
+        attnres_final_memory_query_cap=ATTNRES_FINAL_MEMORY_QUERY_CAP,
+        attnres_final_memory_query_bias_init=ATTNRES_FINAL_MEMORY_QUERY_BIAS_INIT,
+        attnres_final_memory_query_delta_scale=ATTNRES_FINAL_MEMORY_QUERY_DELTA_SCALE,
+        attnres_final_memory_q_mod_scale=ATTNRES_FINAL_MEMORY_Q_MOD_SCALE,
+        attnres_final_memory_k_mod_scale=ATTNRES_FINAL_MEMORY_K_MOD_SCALE,
+        attnres_final_memory_v_mod_scale=ATTNRES_FINAL_MEMORY_V_MOD_SCALE,
+        attnres_final_memory_logit_mod_scale=ATTNRES_FINAL_MEMORY_LOGIT_MOD_SCALE,
+        attnres_final_memory_vres_scale=ATTNRES_FINAL_MEMORY_VRES_SCALE,
         permix_mode=PERMIX_MODE,
         permix_skip_detach=PERMIX_SKIP_DETACH,
         permix_skip_ema=PERMIX_SKIP_EMA,
@@ -2743,6 +3404,7 @@ def main():
             loss = loss / grad_accum_steps
             loss.backward()
             x, y, epoch = next(train_loader)
+        model.last_attnres_grad_metrics = model.collect_attnres_grad_metrics()
 
         # Progress and schedules
         lrm = get_lr_multiplier(progress)
@@ -2830,6 +3492,10 @@ def main():
                 attnres_log += f" | ar_freg: {am['final_register'].item():.2f}"
             if "final_memory_gate" in am:
                 attnres_log += f" | ar_fmem: {am['final_memory_gate'].item():.2f}"
+            if "final_memory_query_gate" in am:
+                attnres_log += f" | ar_fq: {am['final_memory_query_gate'].item():.2f}"
+            if "memory_total" in am:
+                attnres_log += f" | ar_mem: {am['memory_total'].item():.2f}"
             if "aux_loss" in am:
                 attnres_log += f" | ar_aux: {am['aux_loss'].item():.3f}"
         if model.last_segattn_metrics is not None:
@@ -2961,9 +3627,22 @@ def main():
         print(f"attnres_final_memory_scale: {ATTNRES_FINAL_MEMORY_SCALE:.6f}")
         print(f"attnres_final_memory_groups: {ATTNRES_FINAL_MEMORY_GROUPS}")
         print(f"attnres_final_memory_rank: {ATTNRES_FINAL_MEMORY_RANK}")
+        print(f"attnres_final_memory_residual_rank: {ATTNRES_FINAL_MEMORY_RESIDUAL_RANK}")
+        print(f"attnres_final_memory_residual_scale: {ATTNRES_FINAL_MEMORY_RESIDUAL_SCALE:.6f}")
+        print(f"attnres_final_memory_bigram_buckets: {ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS}")
+        print(f"attnres_final_memory_bigram_banks: {ATTNRES_FINAL_MEMORY_BIGRAM_BANKS}")
+        print(f"attnres_final_memory_bigram_scale: {ATTNRES_FINAL_MEMORY_BIGRAM_SCALE:.6f}")
         print(f"attnres_final_memory_gate_cap: {ATTNRES_FINAL_MEMORY_GATE_CAP:.6f}")
         print(f"attnres_final_memory_gate_bias_init: {ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT:.6f}")
         print(f"attnres_final_memory_delta_scale: {ATTNRES_FINAL_MEMORY_DELTA_SCALE:.6f}")
+        print(f"attnres_final_memory_query_cap: {ATTNRES_FINAL_MEMORY_QUERY_CAP:.6f}")
+        print(f"attnres_final_memory_query_bias_init: {ATTNRES_FINAL_MEMORY_QUERY_BIAS_INIT:.6f}")
+        print(f"attnres_final_memory_query_delta_scale: {ATTNRES_FINAL_MEMORY_QUERY_DELTA_SCALE:.6f}")
+        print(f"attnres_final_memory_q_mod_scale: {ATTNRES_FINAL_MEMORY_Q_MOD_SCALE:.6f}")
+        print(f"attnres_final_memory_k_mod_scale: {ATTNRES_FINAL_MEMORY_K_MOD_SCALE:.6f}")
+        print(f"attnres_final_memory_v_mod_scale: {ATTNRES_FINAL_MEMORY_V_MOD_SCALE:.6f}")
+        print(f"attnres_final_memory_logit_mod_scale: {ATTNRES_FINAL_MEMORY_LOGIT_MOD_SCALE:.6f}")
+        print(f"attnres_final_memory_vres_scale: {ATTNRES_FINAL_MEMORY_VRES_SCALE:.6f}")
         print(f"reference_lr:     {REFERENCE_LR:.6f}")
         print(f"attnres_layer_latest:   {model.last_attnres_metrics['layer_latest'].item():.6f}")
         print(f"attnres_layer_x0:       {model.last_attnres_metrics['layer_x0'].item():.6f}")
@@ -2983,7 +3662,37 @@ def main():
             print(f"attnres_final_memory_gate_std: {model.last_attnres_metrics['final_memory_gate_std'].item():.6f}")
             print(f"attnres_final_memory_delta_norm: {model.last_attnres_metrics['final_memory_delta_norm'].item():.6f}")
             print(f"attnres_final_memory_rms: {model.last_attnres_metrics['final_memory_rms'].item():.6f}")
+        if 'final_memory_query_gate' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_query_gate: {model.last_attnres_metrics['final_memory_query_gate'].item():.6f}")
+            print(f"attnres_final_memory_query_gate_std: {model.last_attnres_metrics['final_memory_query_gate_std'].item():.6f}")
+            print(f"attnres_final_memory_query_norm: {model.last_attnres_metrics['final_memory_query_norm'].item():.6f}")
+            print(f"attnres_final_memory_query_rms: {model.last_attnres_metrics['final_memory_query_rms'].item():.6f}")
+            if 'final_memory_query_delta_norm' in model.last_attnres_metrics:
+                print(f"attnres_final_memory_query_delta_norm: {model.last_attnres_metrics['final_memory_query_delta_norm'].item():.6f}")
+            print(f"attnres_final_memory_rms: {model.last_attnres_metrics['final_memory_rms'].item():.6f}")
+        if 'final_memory_mod_q_delta_norm' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_mod_q_delta_norm: {model.last_attnres_metrics['final_memory_mod_q_delta_norm'].item():.6f}")
+        if 'final_memory_mod_k_delta_norm' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_mod_k_delta_norm: {model.last_attnres_metrics['final_memory_mod_k_delta_norm'].item():.6f}")
+            print(f"attnres_final_memory_mod_k_scale_mean: {model.last_attnres_metrics['final_memory_mod_k_scale_mean'].item():.6f}")
+        if 'final_memory_mod_v_delta_norm' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_mod_v_delta_norm: {model.last_attnres_metrics['final_memory_mod_v_delta_norm'].item():.6f}")
+            print(f"attnres_final_memory_mod_v_scale_mean: {model.last_attnres_metrics['final_memory_mod_v_scale_mean'].item():.6f}")
+        if 'final_memory_mod_logit_delta_norm' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_mod_logit_delta_norm: {model.last_attnres_metrics['final_memory_mod_logit_delta_norm'].item():.6f}")
+        if 'final_memory_vres_delta_norm' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_vres_delta_norm: {model.last_attnres_metrics['final_memory_vres_delta_norm'].item():.6f}")
+        if 'final_memory_rms' in model.last_attnres_metrics and 'final_memory_gate' not in model.last_attnres_metrics and 'final_memory_query_gate' not in model.last_attnres_metrics:
+            print(f"attnres_final_memory_rms: {model.last_attnres_metrics['final_memory_rms'].item():.6f}")
+        if 'memory_total' in model.last_attnres_metrics:
+            print(f"attnres_final_memory_total: {model.last_attnres_metrics['memory_total'].item():.6f}")
+            for key in sorted(model.last_attnres_metrics):
+                if key.startswith('memory_') and key != 'memory_total':
+                    print(f"attnres_final_{key}: {model.last_attnres_metrics[key].item():.6f}")
         print(f"attnres_aux_loss: {model.last_attnres_metrics['aux_loss'].item():.6f}")
+    if model.last_attnres_grad_metrics is not None:
+        for key, value in model.last_attnres_grad_metrics.items():
+            print(f"attnres_{key}: {value.item():.6f}")
     print(f"diffattn_mode:    {DIFFATTN_MODE}")
     if model.last_diffattn_metrics is not None:
         print(f"diffattn_q2_mode: {DIFFATTN_Q2_MODE}")

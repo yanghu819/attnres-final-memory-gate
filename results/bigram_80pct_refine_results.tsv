@@ -1,0 +1,7 @@
+config	mean_val_bpb	std_val_bpb	n
+ref_4x1m_g1	1.841160	0.002016	4
+ref_4x1m_g4	1.840970	0.001773	4
+bigram_5x1m_g1	1.844561	0.004403	4
+bigram_6x1m_g1	1.847284	0.004898	4
+bigram_7x1m_g1	1.853205	0.005446	4
+bigram_6x1m_g4	1.847703	0.004477	4

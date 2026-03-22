@@ -1,0 +1,20 @@
+blend_ngram_ref: mean=1.840970 std=0.001773 delta_vs_baseline=0.313071 memory_total=0.000000 embed_grad=0.131843 unified_proj_grad=0.000000
+unified_bigram_only_static: mean=1.940644 std=0.029116 delta_vs_baseline=0.213397 memory_total=0.849976 embed_grad=451.754173 unified_proj_grad=0.000000
+unified_bigram_only_projected: mean=1.927079 std=0.027124 delta_vs_baseline=0.226962 memory_total=0.849880 embed_grad=548.944992 unified_proj_grad=0.011524
+unified_ngram_static: mean=1.885054 std=0.004388 delta_vs_baseline=0.268987 memory_total=0.850000 embed_grad=337.122757 unified_proj_grad=0.000000
+unified_ngram_projected: mean=1.869911 std=0.004679 delta_vs_baseline=0.284130 memory_total=0.850000 embed_grad=489.723488 unified_proj_grad=0.071685
+unified_ngram_static_vs_blend: -0.044084 (negative means unified is worse)
+projected_minus_static_ngram: 0.015144 (negative means projected is worse)
+unified_ngram_minus_unified_bigram_only_static: 0.055589
+
+Heuristics:
+- blend_ngram_ref: memory tokens are barely attended (mean mass 0.000000).
+- blend_ngram_ref: projected bias path shows no gradient signal.
+- unified_bigram_only_static: memory tokens absorb large final-mixer mass (mean mass 0.849976).
+- unified_bigram_only_static: projected bias path shows no gradient signal.
+- unified_bigram_only_projected: memory tokens absorb large final-mixer mass (mean mass 0.849880).
+- unified_bigram_only_projected: projected bias gradients are much smaller than memory-table gradients (ratio 0.000021).
+- unified_ngram_static: memory tokens absorb large final-mixer mass (mean mass 0.850000).
+- unified_ngram_static: projected bias path shows no gradient signal.
+- unified_ngram_projected: memory tokens absorb large final-mixer mass (mean mass 0.850000).
+- unified_ngram_projected: projected bias gradients are much smaller than memory-table gradients (ratio 0.000146).

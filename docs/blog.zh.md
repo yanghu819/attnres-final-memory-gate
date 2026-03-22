@@ -1,77 +1,141 @@
-# 在 AttnRes 上加入 Projected Token Memory
+# 在 AttnRes 上加入 N-Gram Memory：当前最佳实践
 
-## 起点
+这篇博客只讲现在已经被实验打出来的结论，不沿用早期 `projected token register` 的旧口径。
 
-这个项目有两个锚点：
+## 先说结论
 
-- `autoresearch` 的 reference backbone
-- 一个 faithful 的 AttnRes 复现
+我们现在最强的方法，不是把 memory 当成一个新 token 扔进 AttnRes 的 softmax，也不是拿 memory 直接去改 query。
 
-在这个基础上，我们加了一个 projected token-memory register，放在 `AttnRes block2` 上面。
+当前最强做法反而更朴素：
 
-## 我们真正关心的对比
+```python
+m = E_uni[token] + sum_b E_bi_b[hash_b(prev_token, token)]
+y = (1 - g) * y_attnres + g * m
+```
 
-这个 repo 里有三层 baseline：
+也就是：
 
-1. `baseline_off`
-   - 原始 `autoresearch` backbone
-2. `attnres_block2`
-   - faithful AttnRes strong baseline
-3. `projected_deepemb_final`
-   - 我们的 canonical 方法
+- backbone 还是 faithful `AttnRes block2`
+- memory 由 **unigram + hashed bigram** 组成
+- 最后通过一个 **bounded gate** 混到 final output
 
-主结果只看这三个 family。当前精确数字以结果表为准：
+一句白话：
 
-- `results/main_results.tsv`
+**让 AttnRes 先正常思考，再让 n-gram memory 在最后递一张小抄。**
 
-## 方法本身是什么
+## 这套 memory 到底是什么
 
-这个 repo 不把方法包装成一个“全层通用的 residual topology 改写”。
+这里的 memory 不是普通小 embedding，而是更像 Engram 风格的哈希记忆：
 
-我们对外公开的干净版本是：
+- `unigram`：当前 token 的记忆向量
+- `bigram`：`(prev_token, token)` 的哈希记忆向量
+- `bank`：多张独立的 bigram 哈希表
 
-- AttnRes `block_size=2`
-- 一个 token-conditioned register
-- projected bias
-- `query_local` token table
-- `rmsnorm` value mode
-- `final_only` routing
+当前 best 用的是：
 
-一句话：
+- `4 banks`
+- 每个 bank `1M buckets`
 
-**AttnRes backbone + final mixer 上的 projected token memory**
+也就是 4 张独立的大 bigram memory 表，查出来后相加。
 
-## 为什么还要做 ablation
+## 为什么这样用最好
 
-同 cohort 的 ablation 只回答两个问题：
+我们真正测过几种更“有机”的接法：
 
-1. `projected` 是否优于 `static`
-2. `final_only` 在同一批 seeds 上，是否至少不弱于 `all`
+1. memory 直接当 source / KV 进 final softmax  
+结论：太容易被 attend 到，会把真实 depth source 挤掉。
 
-看这里：
+2. memory 直接当 query  
+结论：太容易把 final routing 推坏，甚至塌成 `x0 = 1.0`。
 
-- `results/ablation_results.tsv`
-- `results/figs/fig_ablation_loss_curves.png`
-- `results/figs/fig_ablation_valbpb.png`
+3. memory 只调制 AttnRes final mixer 的 `q/k/v`  
+结论：这是目前最好的有机版本，但还打不过 bounded blend。
 
-## 为什么还要做 fresh-seed follow-up
+所以目前最稳的规律是：
 
-fresh-seed follow-up 不是主结果，它是稳健性检查。
+- memory 最适合 **晚用**
+- memory 要 **有上限**
+- memory 更适合提供 **内容先验**
+- memory 不适合直接和真实 depth source 在同一个 softmax 里硬抢
 
-看这里：
+## 现在最强的结果
 
-- `results/followup_results.tsv`
-- `results/figs/fig_followup_loss_curves.png`
-- `results/figs/fig_followup_valbpb.png`
+结果表：
 
-## 一个必须写清楚的 caveat
+- [`results/ngram_module_ablation_results.tsv`](../results/ngram_module_ablation_results.tsv)
+- [`results/bigram_80pct_refine_results.tsv`](../results/bigram_80pct_refine_results.tsv)
 
-这个 repo 的公开表述必须老实。
+当前最强 practical 方法：
 
-如果最终最优点里 `attnres_final_register` 仍然很高，那么更安全的解释应该是：
+- `AttnRes block2` baseline: `2.154041`
+- `unigram + bigram, 4 banks x 1M buckets`: `1.840970`
 
-- projected token memory 确实有用
-- 主要起作用的位置是 final mixer
-- 这更像是“叠在 AttnRes 上的 final-path token-memory readout”，而不是一个均匀作用于全层的 routing 改进
+这就是当前最强 best practice。
 
-这个说法更窄，但也更站得住。
+## 最好的有机版本是什么
+
+如果你坚持“不外挂 branch”，那当前最好的版本是：
+
+- memory 不新增 token
+- memory 不新增 source
+- memory 只调制 final AttnRes mixer 的 `q/k/v`
+
+也就是 `modqkv`：
+
+```python
+q' = q + 0.02 * Wq(memory)
+k' = k + 0.05 * Wk(memory)
+v' = v + 0.05 * Wv(memory)
+```
+
+对应结果：
+
+- [`results/modqkv_refine_results.tsv`](../results/modqkv_refine_results.tsv)
+
+当前 best organic：
+
+- `modqkv q=0.02, k=0.05, v=0.05`: `2.004640`
+
+它明显优于 AttnRes baseline，但还不如上面的 bounded blend。
+
+## 一个重要发现
+
+把 memory 做大，不代表越大越好。
+
+我们测过：
+
+- `4 banks x 1M`
+- `5 banks x 1M`
+- `6 banks x 1M`
+- `7 banks x 1M`
+
+结果是：
+
+- `4x1m` 最好
+- 再往上堆没有继续变好
+
+所以问题不是单纯“容量越大越强”，而是：
+
+**memory 的结构要对。**
+
+## 接下来该怎么做
+
+如果继续沿着当前 best practice 往前推，我会优先做：
+
+1. `unigram + bigram + trigram`
+2. `tied unigram + bigram residual + trigram residual`
+3. 稀疏 bank 选择，而不是更大规模的 dense bank 叠加
+
+也就是继续扩 memory 的**结构化表达**，而不是继续把 AttnRes 路由搞复杂。
+
+## 总结
+
+当前最强方法不是“更复杂的 AttnRes”，而是：
+
+**AttnRes + bounded unigram/bigram memory readout**
+
+而当前最好的有机尝试是：
+
+**memory-conditioned `modqkv`**
+
+但到现在为止，真正打赢所有方案的，仍然是那个更朴素的 final bounded blend。

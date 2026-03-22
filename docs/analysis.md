@@ -4,84 +4,115 @@
 
 This repo uses two public anchors:
 
-- `karpathy/autoresearch` for the reference backbone and training harness style
-- `tokenbender/nanogpt-attnres-repro` for the faithful AttnRes baseline behavior
+- `karpathy/autoresearch` for the reference backbone and training-harness style
+- `tokenbender/nanogpt-attnres-repro` for faithful AttnRes baseline behavior
 
-The strong baseline in this repo is **not** a modified register variant. It is the faithful `AttnRes block2 softmax` setup with no registers.
+The strong baseline in this repo is the faithful `AttnRes block2 softmax` setup with no extra registers.
 
-## Public families
+## What changed
 
-The public experiment surface is intentionally small:
+Early versions of this repo studied projected token-memory registers. That is no longer the main framing.
 
-- `baseline_off`
-- `attnres_block2`
-- `projected_deepemb_final`
-- `projected_deepemb_final_static`
-- `projected_deepemb_all`
+The current experimental picture is simpler:
 
-## Core claim
+1. the strongest method is a **bounded final blend** between AttnRes output and scalable n-gram memory
+2. the best internal or “organic” integration so far is **memory-conditioned `modqkv`** at the final AttnRes mixer
 
-The method under study is **projected token memory** added on top of the `AttnRes block2` backbone.
+## Current practical method
 
-The repo separates three evidence tiers:
+Current strongest practical method:
 
-1. **Main matrix**
-   - same backbone family
-   - same training budget
-   - same seeds
-   - compares `baseline_off`, `attnres_block2`, and `projected_deepemb_final`
+```python
+m = E_uni[token] + sum_b E_bi_b[hash_b(prev_token, token)]
+y = (1 - g) * y_attnres + g * m
+```
 
-2. **Mechanism ablation**
-   - same seeds as the main matrix
-   - fixed LR
-   - compares `attnres_block2`, `projected_deepemb_final_static`, `projected_deepemb_final`, and `projected_deepemb_all`
-   - answers two questions:
-     - does `projected` beat `static`?
-     - is `final_only` at least competitive with `all` on the same cohort?
+Properties:
 
-3. **Fresh-seed follow-up**
-   - new seeds only
-   - fixed LR
-   - compares `attnres_block2`, `projected_deepemb_final`, and `projected_deepemb_all`
-   - checks robustness outside the main cohort
+- backbone: faithful `AttnRes block2`
+- memory: unigram + hashed bigram
+- scaling: `4 banks x 1M buckets`
+- usage: final-only bounded readout
+
+This line consistently beats the AttnRes baseline in the checked-in result tables.
+
+## Current organic method
+
+Current best organic line:
+
+```python
+q' = q + aq * Wq(memory)
+k' = k + ak * Wk(memory)
+v' = v + av * Wv(memory)
+y = AttnResFinal(q', k', v')
+```
+
+Properties:
+
+- no extra memory token
+- no extra source in the final softmax
+- no external blend branch
+- memory only modulates the final AttnRes mixer internals
+
+Best current setting in the repo:
+
+- `q = 0.02`
+- `k = 0.05`
+- `v = 0.05`
+
+This line is clearly positive versus the AttnRes baseline, but it still underperforms the bounded final blend.
+
+## What did not work
+
+These routes were tested and are not the current main line:
+
+- memory as a unified extra source / KV inside the final softmax
+- memory as a query token
+- pure tied-embedding value residual
+- dense scaling beyond the `4 banks x 1M` regime
+
+The key failure modes were:
+
+- memory takeover: memory absorbs too much final-mixer mass
+- routing collapse: memory-conditioned query shifts push final routing into degenerate distributions
 
 ## Result files
 
-Read the generated TSV summaries, not hard-coded prose numbers:
+For current strongest practical results:
 
-- `results/main_results.tsv`
-- `results/ablation_results.tsv`
-- `results/followup_results.tsv`
+- `results/ngram_module_ablation_results.tsv`
+- `results/bigram_80pct_refine_results.tsv`
 
-Read the raw per-run tables when you need per-seed or per-LR detail:
+For current best organic results:
 
-- `results/raw/main_fair_matrix.tsv`
-- `results/raw/ablation_matrix.tsv`
-- `results/raw/followup_results.tsv`
+- `results/modqkv_refine_results.tsv`
+- `results/modqkv_refine_analysis.txt`
+
+For source / mechanism analysis:
+
+- `results/unified_memory_tokens_results.tsv`
+- `results/unified_memory_tokens_analysis.txt`
+- `results/tied_refine_results.tsv`
 
 ## Current interpretation
 
-The intended public interpretation is:
+The safe interpretation is now:
 
-- `AttnRes block2` is the strong baseline
-- projected token memory is the innovation
-- `final_only` is the canonical public form unless same-cohort evidence later proves `all` is materially better
-
-One caveat must remain explicit:
-
-- if `attnres_final_register` stays very high in the winning runs, the method should be described as a **final-path token-memory readout on top of AttnRes**, not as a mild all-layer routing tweak
+- scalable n-gram memory is useful on top of AttnRes
+- it works best as a **bounded final readout**
+- the cleanest internal integration found so far is **small `q/k/v` modulation**
+- broad all-layer routing claims are not supported by the current evidence
 
 ## Public framing
 
 Safe framing:
 
-- strong baseline: faithful AttnRes block2
-- innovation: projected token memory on top of AttnRes
-- cleanest final form: final-only projected token memory
+- strong baseline: faithful `AttnRes block2`
+- strongest method: bounded unigram+bigram final-memory blend
+- best organic method: memory-conditioned `modqkv`
 
 Unsafe framing:
 
-- “all AttnRes injection points are equally important”
-- “this is a general all-layer AttnRes routing improvement”
-
-The repo is designed so that the release scripts can regenerate all public claims from the raw tables.
+- “we found a uniformly better all-layer AttnRes routing mechanism”
+- “projected token register is still the canonical method”
+- “memory should compete directly with depth sources in the same softmax”

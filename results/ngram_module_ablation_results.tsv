@@ -1,0 +1,6 @@
+config	mean_val_bpb	std_val_bpb	n
+strong_baseline	2.154041	0.055560	4
+unigram_only_matched	2.050225	0.000994	4
+unigram_only_best	2.051346	0.003515	4
+bigram_only_4x1m	1.943597	0.027338	4
+unigram_plus_bigram_4x1m	1.840970	0.001773	4
