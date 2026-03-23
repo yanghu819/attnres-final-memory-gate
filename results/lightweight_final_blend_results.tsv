@@ -1,0 +1,7 @@
+config	mean_val_bpb
+blend_ngram_ref	1.840800
+lightblend_r96_b256k	1.848812
+lightblend_r64_b256k	1.855903
+lightblend_r64_b64k	1.871030
+lightblend_r32_b64k	1.889016
+strong_baseline	2.125691

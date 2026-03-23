@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable
+from statistics import mean, pstdev
+from typing import Iterable, TYPE_CHECKING, Any
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 STEP_RE = re.compile(r"step\s+(\d+)\s+\([^)]*\)\s+\|\s+loss:\s+([0-9.]+)")
 KV_RE = re.compile(r"^([A-Za-z0-9_]+):\s+(.+?)\s*$", re.MULTILINE)
 DEFAULT_REQUIRED_SUMMARY_KEYS = ("val_bpb", "num_steps", "peak_vram_mb")
 
 
-def parse_log_curve(path: Path) -> pd.DataFrame:
+def parse_log_curve(path: Path) -> Any:
+    import pandas as pd
+
     text = path.read_text(errors="replace").replace("\r", "\n")
     rows = [(int(s), float(l)) for s, l in STEP_RE.findall(text)]
     df = pd.DataFrame(rows, columns=["step", "loss"]).drop_duplicates("step").sort_values("step")
@@ -37,5 +41,7 @@ def parse_required_summary_metrics(
 
 
 def mean_std(values: Iterable[float]) -> tuple[float, float]:
-    s = pd.Series(list(values), dtype=float)
-    return float(s.mean()), float(s.std(ddof=0) if len(s) else 0.0)
+    vals = [float(v) for v in values]
+    if not vals:
+        return 0.0, 0.0
+    return float(mean(vals)), float(pstdev(vals))

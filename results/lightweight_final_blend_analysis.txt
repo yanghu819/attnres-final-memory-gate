@@ -1,0 +1,6 @@
+blend_ngram_ref	mean=1.840800	std=0.003322	mean_vram_mb=15749.0	n=4	delta_vs_baseline=-0.284892
+lightblend_r96_b256k	mean=1.848812	std=0.001579	mean_vram_mb=3991.9	n=4	delta_vs_baseline=-0.276879
+lightblend_r64_b256k	mean=1.855903	std=0.000821	mean_vram_mb=3740.0	n=4	delta_vs_baseline=-0.269788
+lightblend_r64_b64k	mean=1.871030	std=0.001315	mean_vram_mb=3356.8	n=4	delta_vs_baseline=-0.254662
+lightblend_r32_b64k	mean=1.889016	std=0.002333	mean_vram_mb=3297.0	n=4	delta_vs_baseline=-0.236676
+strong_baseline	mean=2.125691	std=0.024058	mean_vram_mb=3199.8	n=4	delta_vs_baseline=+0.000000

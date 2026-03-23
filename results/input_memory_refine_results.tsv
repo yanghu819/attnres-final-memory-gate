@@ -1,0 +1,8 @@
+config	mean_val_bpb
+input_bigram_smear_s025	1.969269
+input_bigram_smear_s050_b2	1.997448
+input_bigram_smear_s050	2.005261
+input_bigram_smear_ref	2.075486
+strong_baseline	2.154041
+input_bigram_trigram_t025_s050	2.168370
+input_bigram_trigram_t010_s050	2.175946

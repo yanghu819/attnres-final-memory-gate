@@ -1,0 +1,7 @@
+input_bigram_smear_s025	mean=1.969269	std=0.008002	n=4	delta_vs_baseline=-0.184772
+input_bigram_smear_s050_b2	mean=1.997448	std=0.012258	n=4	delta_vs_baseline=-0.156592
+input_bigram_smear_s050	mean=2.005261	std=0.008221	n=4	delta_vs_baseline=-0.148780
+input_bigram_smear_ref	mean=2.075486	std=0.019146	n=4	delta_vs_baseline=-0.078555
+strong_baseline	mean=2.154041	std=0.055560	n=4	delta_vs_baseline=+0.000000
+input_bigram_trigram_t025_s050	mean=2.168370	std=0.168290	n=4	delta_vs_baseline=+0.014329
+input_bigram_trigram_t010_s050	mean=2.175946	std=0.173124	n=4	delta_vs_baseline=+0.021905

@@ -80,6 +80,20 @@ FINAL_MEMORY_COMMON_ENV = {
     "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT": "4.0",
 }
 
+INPUT_MEMORY_COMMON_ENV = {
+    **ATTNRES_BLOCK2_ENV,
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_VALUE_MODE": "rmsnorm",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SCALE": "1.0",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_HASH_DIM": "64",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_BUCKETS": "16384",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_BANKS": "4",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_SCALE": "1.0",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_TRIGRAM_BUCKETS": "16384",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_TRIGRAM_BANKS": "4",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_TRIGRAM_SCALE": "1.0",
+    "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SMEAR_BIAS_INIT": "-4.0",
+}
+
 PRESETS = {
     "baseline_off": Preset(
         name="baseline_off",
@@ -90,6 +104,28 @@ PRESETS = {
         name="attnres_block2",
         description="Faithful AttnRes strong baseline: block size 2, softmax, no registers.",
         env=ATTNRES_BLOCK2_ENV,
+    ),
+    "attnres_block2_untied": Preset(
+        name="attnres_block2_untied",
+        description="Faithful AttnRes strong baseline with an untied LM head for LM-head rotation ablations.",
+        env={
+            **ATTNRES_BLOCK2_ENV,
+            "AUTORESEARCH_UNTIE_LM_HEAD": "1",
+        },
+    ),
+    "attnres_block2_lmrotate_r16": Preset(
+        name="attnres_block2_lmrotate_r16",
+        description="AttnRes strong baseline with untied LM head and periodic gradient-aware LM-head rotation.",
+        env={
+            **ATTNRES_BLOCK2_ENV,
+            "AUTORESEARCH_UNTIE_LM_HEAD": "1",
+            "AUTORESEARCH_LM_HEAD_ROTATE_EVERY": "64",
+            "AUTORESEARCH_LM_HEAD_ROTATE_RANK": "16",
+            "AUTORESEARCH_LM_HEAD_ROTATE_ALPHA": "0.05",
+            "AUTORESEARCH_LM_HEAD_ROTATE_MAX_POSITIONS": "64",
+            "AUTORESEARCH_LM_HEAD_ROTATE_BUFFER_ROWS": "2048",
+            "AUTORESEARCH_LM_HEAD_ROTATE_BUFFER_DEVICE": "cpu",
+        },
     ),
     "projected_deepemb_final": Preset(
         name="projected_deepemb_final",
@@ -174,6 +210,19 @@ PRESETS = {
             "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "8192",
         },
     ),
+    "final_memory_tied_bigram_factorized_r64_b65536": Preset(
+        name="final_memory_tied_bigram_factorized_r64_b65536",
+        description="Tied final token memory plus a low-rank hashed bigram residual code projected to hidden size.",
+        env={
+            **FINAL_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "64",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "65536",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "4",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+        },
+    ),
     "final_memory_vres_tied": Preset(
         name="final_memory_vres_tied",
         description="Organic value-residual AttnRes: use tied input embedding as memory code and project only into final depth values.",
@@ -215,6 +264,31 @@ PRESETS = {
             "AUTORESEARCH_ATTNRES_FINAL_MEMORY_Q_MOD_SCALE": "0.01",
             "AUTORESEARCH_ATTNRES_FINAL_MEMORY_K_MOD_SCALE": "0.02",
             "AUTORESEARCH_ATTNRES_FINAL_MEMORY_V_MOD_SCALE": "0.02",
+        },
+    ),
+    "input_bigram_hash": Preset(
+        name="input_bigram_hash",
+        description="AttnRes block2 with input-side hashed bigram residual features.",
+        env={
+            **INPUT_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_MODE": "bigram",
+        },
+    ),
+    "input_bigram_hash_smear": Preset(
+        name="input_bigram_hash_smear",
+        description="AttnRes block2 with input-side hashed bigram residual features plus SmearGate.",
+        env={
+            **INPUT_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_MODE": "bigram",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SMEAR": "1",
+        },
+    ),
+    "input_bigram_trigram_hash": Preset(
+        name="input_bigram_trigram_hash",
+        description="AttnRes block2 with input-side hashed bigram+trigram residual features.",
+        env={
+            **INPUT_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_MODE": "bigram_trigram",
         },
     ),
 }
