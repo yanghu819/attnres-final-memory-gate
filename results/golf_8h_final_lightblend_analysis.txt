@@ -1,0 +1,19 @@
+Golf 8h Final Lightblend Summary
+================================
+
+Broad 10m sweep (45..48)
+- best: golf_final_lightblend_r96_b65536_c090
+- mean val_bpb: 1.658716
+- std: 0.014028
+- tiny baseline mean: 1.723575
+
+Holdout 20m (49..50)
+- tiny baseline mean: 1.550197
+- golf_final_lightblend_r96_b65536_c090 mean: 1.571063
+- golf_final_lightblend_r128_b32768_c090 mean: 1.574987
+- golf_final_lightblend_r64_b32768_c095 mean: 1.605332
+
+Interpretation
+- tiny final lightblend is a strong short-budget method
+- it did not beat the tiny baseline on the longer 20-minute holdout
+- therefore the current golf line should be framed as a short-budget accelerator, not a stable longer-budget canonical

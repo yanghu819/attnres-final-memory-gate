@@ -1,42 +1,39 @@
 # Results Layout
 
-This directory now keeps only the **current active** result summaries at the top level.
+This directory keeps only the results that define the current public story.
 
-## Active top-level results
+## Active Top-Level Results
 
-Current top-level files correspond to the repo's active lines:
+### Practical canonical final blend
+- `results/raw/lightweight_final_blend_refine_results.tsv`
+- `results/raw/lightweight_final_blend_verify_results.tsv`
+- `results/lightweight_final_blend_refine_analysis.txt`
+- `results/lightweight_final_blend_verify_analysis.txt`
+- `results/figs/fig_lightweight_final_blend_refine_valbpb.png`
 
-- strongest overall bounded final blend
-- best scalable final-memory blend
-- best input-side local-memory line
-- best organic `modqkv` line
-
-Top-level raw files kept active:
-
+### Full-capacity reference blend
 - `results/raw/ngram_module_ablation_results.tsv`
 - `results/raw/bigram_80pct_refine_results.tsv`
-- `results/raw/lightweight_final_blend_results.tsv`
-- `results/raw/input_memory_ablation_results.tsv`
+- `results/ngram_module_ablation_results.tsv`
+- `results/bigram_80pct_refine_results.tsv`
+
+### Tiny golf short-budget line
+- `results/raw/golf_8h_final_lightblend_results.tsv`
+- `results/golf_8h_final_lightblend_analysis.txt`
+
+### Secondary comparison lines
 - `results/raw/input_memory_refine_results.tsv`
+- `results/input_memory_refine_results.tsv`
+- `results/input_memory_refine_analysis.txt`
 - `results/raw/modqkv_refine_results.tsv`
+- `results/modqkv_refine_results.tsv`
+- `results/modqkv_refine_analysis.txt`
 
-Top-level figures kept active:
+## Archived Results
 
-- `results/figs/fig_ngram_module_ablation_loss_curves.png`
-- `results/figs/fig_ngram_module_ablation_valbpb.png`
-- `results/figs/fig_bigram_80pct_refine_loss_curves.png`
-- `results/figs/fig_bigram_80pct_refine_valbpb.png`
-- `results/figs/fig_lightweight_final_blend_valbpb.png`
-- `results/figs/fig_input_memory_refine_valbpb.png`
-- `results/figs/fig_modqkv_refine_loss_curves.png`
-- `results/figs/fig_modqkv_refine_summary.png`
-
-## Archived results
-
-Older exploratory lines were moved to:
-
+Intermediate and exploratory outputs live under:
 - `results/archive/`
 - `results/archive/raw/`
 - `results/archive/figs/`
 
-These archived files are preserved for reference, but they are not the repo's current recommended starting points.
+That includes old golf probe/refine tables, unified/query memory routes, LM-head rotation, and earlier gate/register sweeps.

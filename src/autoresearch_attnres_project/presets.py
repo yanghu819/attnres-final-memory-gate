@@ -94,6 +94,14 @@ INPUT_MEMORY_COMMON_ENV = {
     "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SMEAR_BIAS_INIT": "-4.0",
 }
 
+GOLF_TINY_COMMON_ENV = {
+    **ATTNRES_BLOCK2_ENV,
+    "AUTORESEARCH_DEPTH": "10",
+    "AUTORESEARCH_ASPECT_RATIO": "8",
+    "AUTORESEARCH_DEVICE_BATCH_SIZE": "64",
+    "AUTORESEARCH_TOTAL_BATCH_SIZE": "16384",
+}
+
 PRESETS = {
     "baseline_off": Preset(
         name="baseline_off",
@@ -223,6 +231,34 @@ PRESETS = {
             "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
         },
     ),
+    "final_memory_tied_bigram_factorized_r128_b262144_c080": Preset(
+        name="final_memory_tied_bigram_factorized_r128_b262144_c080",
+        description="Low-rank final bigram blend frontier point: tied unigram plus rank-128 hashed bigram code, 256k buckets, cap 0.80.",
+        env={
+            **FINAL_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "128",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "262144",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "4",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP": "0.80",
+        },
+    ),
+    "final_memory_tied_bigram_factorized_r128_b524288_c085": Preset(
+        name="final_memory_tied_bigram_factorized_r128_b524288_c085",
+        description="Best scalable final-memory blend: tied unigram plus rank-128 hashed bigram code, 512k buckets, cap 0.85.",
+        env={
+            **FINAL_MEMORY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "128",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "524288",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "4",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP": "0.85",
+        },
+    ),
     "final_memory_vres_tied": Preset(
         name="final_memory_vres_tied",
         description="Organic value-residual AttnRes: use tied input embedding as memory code and project only into final depth values.",
@@ -289,6 +325,74 @@ PRESETS = {
         env={
             **INPUT_MEMORY_COMMON_ENV,
             "AUTORESEARCH_ATTNRES_INPUT_MEMORY_MODE": "bigram_trigram",
+        },
+    ),
+    "golf_input_bigram_smear_tiny": Preset(
+        name="golf_input_bigram_smear_tiny",
+        description="Parameter-golf style tiny AttnRes candidate: small input-side bigram hash with light SmearGate.",
+        env={
+            **GOLF_TINY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_MODE": "bigram",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SMEAR": "1",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_HASH_DIM": "16",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_BUCKETS": "8192",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_BANKS": "2",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_BIGRAM_SCALE": "1.0",
+            "AUTORESEARCH_ATTNRES_INPUT_MEMORY_TRIGRAM_SCALE": "0.0",
+        },
+    ),
+    "golf_attnres_tiny": Preset(
+        name="golf_attnres_tiny",
+        description="Tiny AttnRes block2 baseline sized for parameter-golf style budget experiments.",
+        env=GOLF_TINY_COMMON_ENV,
+    ),
+    "golf_final_lightblend_r64_b32768_c095": Preset(
+        name="golf_final_lightblend_r64_b32768_c095",
+        description="Tiny final-lightblend cheap preset for parameter-golf style experiments: rank-64, 32k buckets, cap 0.95.",
+        env={
+            **GOLF_TINY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_VALUE_MODE": "rmsnorm",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP": "0.95",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT": "4.0",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "64",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "32768",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "2",
+        },
+    ),
+    "golf_final_lightblend_r96_b65536_c090": Preset(
+        name="golf_final_lightblend_r96_b65536_c090",
+        description="Tiny final-lightblend short-budget best for parameter-golf style experiments: rank-96, 64k buckets, cap 0.90.",
+        env={
+            **GOLF_TINY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_VALUE_MODE": "rmsnorm",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP": "0.90",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT": "4.0",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "96",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "65536",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "2",
+        },
+    ),
+    "golf_final_lightblend_tiny": Preset(
+        name="golf_final_lightblend_tiny",
+        description="Parameter-golf style tiny AttnRes candidate: bounded final blend with tied unigram and tiny low-rank bigram code.",
+        env={
+            **GOLF_TINY_COMMON_ENV,
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_MODE": "static",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SOURCE": "tied_bigram_factorized",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_VALUE_MODE": "rmsnorm",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_SCALE": "0.25",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_CAP": "0.85",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_GATE_BIAS_INIT": "4.0",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_RANK": "16",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BUCKETS": "8192",
+            "AUTORESEARCH_ATTNRES_FINAL_MEMORY_BIGRAM_BANKS": "2",
         },
     ),
 }

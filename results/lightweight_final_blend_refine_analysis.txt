@@ -1,0 +1,10 @@
+lightblend_r128_b512k_c085	mean=1.840358	std=0.001021	mean_vram_mb=5277.8	n=4	delta_vs_baseline=-0.285334
+blend_ngram_ref	mean=1.840800	std=0.003322	mean_vram_mb=15749.0	n=4	delta_vs_baseline=-0.284892
+lightblend_r128_b256k_c080	mean=1.841150	std=0.002453	mean_vram_mb=4254.0	n=4	delta_vs_baseline=-0.284541
+lightblend_r128_b512k_c080	mean=1.841373	std=0.002317	mean_vram_mb=5277.8	n=4	delta_vs_baseline=-0.284318
+lightblend_r96_b512k_c080	mean=1.841528	std=0.001173	mean_vram_mb=4766.7	n=4	delta_vs_baseline=-0.284164
+lightblend_r128_b256k_c085	mean=1.843431	std=0.001207	mean_vram_mb=4254.0	n=4	delta_vs_baseline=-0.282261
+lightblend_r96_b256k_c080	mean=1.844644	std=0.003013	mean_vram_mb=3991.9	n=4	delta_vs_baseline=-0.281048
+lightblend_r96_b512k_c085	mean=1.846397	std=0.001822	mean_vram_mb=4766.7	n=4	delta_vs_baseline=-0.279294
+lightblend_r96_b256k_c085	mean=1.848812	std=0.001579	mean_vram_mb=3991.9	n=4	delta_vs_baseline=-0.276879
+strong_baseline	mean=2.125691	std=0.024058	mean_vram_mb=3199.8	n=4	delta_vs_baseline=+0.000000

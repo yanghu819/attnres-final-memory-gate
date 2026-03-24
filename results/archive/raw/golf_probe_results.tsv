@@ -1,0 +1,4 @@
+config	seed	peak_vram_mb	val_bpb	num_steps	attnres_input_memory_delta_norm	attnres_input_memory_smear_gate	attnres_final_memory_delta_norm	attnres_final_memory_gate
+golf_attnres_tiny	45	4579.6	2.788997	64				
+golf_input_bigram_smear_tiny	45	4590.9	2.822791	64	0.239739	0.017944		
+golf_final_lightblend_tiny	45	4598.0	2.620649	64			7.085227	0.835938

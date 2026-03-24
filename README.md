@@ -1,32 +1,20 @@
 # autoresearch-attnres-project
 
-A clean AutoDL-first repo for studying how to combine **AttnRes** with **scalable n-gram memory**.
+A focused repo for studying how **AttnRes** benefits from **scalable n-gram memory**.
 
-## Current active lines
+## Recommended Best Practices
 
-This repo now keeps only the current active experiment families at the top level.
-Historical lines are still preserved under `scripts/archive/` and `results/archive/`.
+### 1. Practical Canonical Method
+Use this first.
 
-### 1. Strongest overall method
 - backbone: faithful `AttnRes block2`
-- usage: final-only bounded blend
-- memory: unigram + hashed bigram
-- best current setting: `4 banks x 1M buckets`
-- best checked-in result: `1.840970`
-
-Core form:
-
-```python
-m = E_uni[token] + sum_b E_bi_b[hash_b(prev_token, token)]
-y = (1 - g) * y_attnres + g * m
-```
-
-### 1b. Best scalable final-blend variant
-- same final-only bounded blend as the strongest overall method
-- replace the full-dim bigram table with a low-rank hashed bigram code plus a shared projection
-- best current setting: `rank=96`, `4 banks x 256k buckets`
-- checked-in result: `1.848812`
-- mean peak VRAM: `3991.9 MB` versus `15749.0 MB` for the full bigram blend
+- readout: **final-only bounded blend**
+- memory: **tied unigram + low-rank hashed bigram code**
+- canonical preset: `final_memory_tied_bigram_factorized_r128_b524288_c085`
+- checked result:
+  - refine 45..48 mean: `1.840357`
+  - verify 49..52 mean: `1.839716`
+- mean peak VRAM: `5277.8 MB`
 
 Core form:
 
@@ -35,146 +23,111 @@ m = W_tied[token] + P_bi(E_bi_code[hash(prev_token, token)])
 y = (1 - g) * y_attnres + g * m
 ```
 
-### 2. Best input-side method
-- inspired by `parameter-golf`
-- input-side hashed bigram residual + light smear gate
-- best checked-in result: `1.969269`
-- best setting: `input_bigram_smear_s025`
+This is the current repo-wide **best practice** because it keeps essentially full performance while cutting memory cost hard.
 
-This is the strongest "small local prior" line, but it still underperforms the final bounded blend.
+### 2. Full-Capacity Reference
+Use this when you only care about absolute headroom.
 
-### 3. Best organic internal method
-- memory does not become an extra token, source, or branch
-- memory only modulates the final AttnRes mixer's `q/k/v`
-- best checked-in result: `2.004640`
-- best setting: `modqkv q=0.02, k=0.05, v=0.05`
+- same final-only bounded blend
+- memory: **full hidden-dim unigram + hashed bigram**
+- checked result:
+  - verify 49..52 mean: `1.840078`
+- mean peak VRAM: `15749.0 MB`
 
-This is the cleanest internal integration found so far, but it still underperforms the bounded final blend.
+Core form:
 
-## What actually held up
+```python
+m = E_uni[token] + sum_b E_bi_b[hash_b(prev_token, token)]
+y = (1 - g) * y_attnres + g * m
+```
+
+This remains the full-capacity reference, but it is no longer the practical default.
+
+### 3. Golf Short-Budget Best
+Use this only for `parameter-golf` style tiny, short-budget experiments.
+
+- tiny backbone: `golf_attnres_tiny`
+- method: tiny final bounded blend with factorized bigram code
+- canonical preset: `golf_final_lightblend_r96_b65536_c090`
+- 10-minute broad sweep mean 45..48: `1.658716`
+- artifact budget: within `16MB` at low-bit export
+
+Important limit:
+- on the 20-minute holdout, tiny baseline beat the lightblend variants
+- so this is a **short-budget weapon**, not a stable long-budget canonical yet
+
+## Secondary Lines
+
+These are still informative, but not the repo's main recommendation.
+
+- input-side local prior: `input_bigram_smear_s025_b64k`
+  - useful small prior
+  - still weaker than the final bounded blend line
+- organic internal integration: `modqkv q=0.02, k=0.05, v=0.05`
+  - clean internal method
+  - still weaker than the bounded final blend line
+
+## What Actually Held Up
 
 The stable empirical rules are narrow:
 
 - memory helps most when used **late** or **lightly**
-- memory should be **bounded** if used as a final readout
-- memory should provide **content / prior**, not become a hard competitor inside the same softmax
-- input-side local memory can help, but only as a **small residual prior**
+- final readout memory must be **bounded**
+- memory should act as **content/prior**, not a hard competitor inside the same softmax
+- input-side memory only works as a **small local residual prior**
+- low-rank bigram codes are enough to keep almost all of the full blend's gain
 
-## What is no longer current
+## Start Here
 
-These lines are preserved only as historical exploration under `archive/`:
+### Reproduce the practical canonical method
 
-- projected token-register family
-- unified memory source / query-token routes
-- pure tied value-residual route
-- LM-head rotation line
-- earlier simple-gate / capped-gate / tied-memory / grouped-memory sweeps
+```bash
+bash scripts/repro_lightweight_final_blend_refine.sh
+bash scripts/repro_lightweight_final_blend_verify.sh
+```
 
-They are not the current recommended starting points.
+Key files:
+- `results/raw/lightweight_final_blend_refine_results.tsv`
+- `results/raw/lightweight_final_blend_verify_results.tsv`
+- `results/lightweight_final_blend_refine_analysis.txt`
+- `results/lightweight_final_blend_verify_analysis.txt`
+- `results/figs/fig_lightweight_final_blend_refine_valbpb.png`
 
-## Repo layout
+### Reproduce the golf short-budget line
+
+```bash
+bash scripts/repro_golf_8h_final_lightblend.sh
+```
+
+Key files:
+- `results/raw/golf_8h_final_lightblend_results.tsv`
+- `results/golf_8h_final_lightblend_analysis.txt`
+
+## Repo Layout
 
 - `src/autoresearch_attnres_project/legacy_engine.py`
-  - core training engine and current memory integration logic
+  - core training engine and memory integrations
 - `src/autoresearch_attnres_project/presets.py`
-  - named presets
+  - named presets, including the canonical practical and golf variants
 - `scripts/`
-  - only current active training / sweep / plot / analysis scripts
+  - current active reproduction and analysis scripts
 - `scripts/archive/`
-  - historical experiment scripts kept for reference
+  - exploratory or superseded scripts
 - `results/`
-  - current active result summaries and figures
+  - current active summaries and figures
 - `results/archive/`
-  - historical result tables and figures
+  - historical and exploratory outputs
 - `docs/analysis.md`
-  - current interpretation and cleanup status
-- `docs/blog.en.md`
-  - English blog post
-- `docs/blog.zh.md`
-  - Chinese blog post
-
-## Reproduction
-
-### Environment
-
-Primary target:
-- AutoDL single-GPU box
-- Python via `/root/miniconda3/bin/python`
-- package manager via `python -m uv`
-
-### Install
-
-```bash
-/root/miniconda3/bin/python -m pip install uv
-/root/miniconda3/bin/python -m uv sync
-```
-
-### Prepare data
-
-```bash
-bash scripts/prepare_autodl.sh
-```
-
-### Reproduce strongest overall line
-
-```bash
-bash scripts/repro_ngram_module_ablation.sh
-bash scripts/repro_bigram_80pct_refine.sh
-```
-
-Key files:
-- `results/ngram_module_ablation_results.tsv`
-- `results/bigram_80pct_refine_results.tsv`
-- `results/figs/fig_ngram_module_ablation_loss_curves.png`
-- `results/figs/fig_bigram_80pct_refine_loss_curves.png`
-
-### Reproduce best scalable final-blend line
-
-```bash
-bash scripts/repro_lightweight_final_blend.sh
-```
-
-Key files:
-- `results/raw/lightweight_final_blend_results.tsv`
-- `results/lightweight_final_blend_results.tsv`
-- `results/lightweight_final_blend_analysis.txt`
-- `results/figs/fig_lightweight_final_blend_valbpb.png`
-
-### Reproduce best organic line
-
-```bash
-bash scripts/repro_modqkv_refine.sh
-```
-
-Key files:
-- `results/modqkv_refine_results.tsv`
-- `results/modqkv_refine_analysis.txt`
-- `results/figs/fig_modqkv_refine_loss_curves.png`
-- `results/figs/fig_modqkv_refine_summary.png`
-
-### Reproduce current input-side line
-
-```bash
-bash scripts/repro_input_memory_ablation.sh
-bash scripts/repro_input_memory_refine.sh
-```
-
-Key files:
-- `results/raw/input_memory_ablation_results.tsv`
-- `results/input_memory_refine_results.tsv`
-- `results/input_memory_refine_analysis.txt`
-- `results/figs/fig_input_memory_refine_valbpb.png`
+  - current interpretation
 
 ## Framing
 
-Use the repo with this framing:
+Use this repo with the following framing:
 
-- strong baseline: faithful `AttnRes block2`
-- strongest method: bounded unigram+bigram final-memory blend
-- best scalable final-memory method: tied unigram + low-rank bigram final blend
-- strongest input-side line: light input bigram prior with smear
-- best organic method: memory-conditioned `modqkv`
+- strongest practical method: **final bounded blend with tied unigram + low-rank bigram code**
+- full-capacity reference: **final bounded full unigram+bigram blend**
+- golf short-budget method: **tiny final lightblend**
 
-Do not frame this repo as a broad all-layer AttnRes routing rewrite. Current evidence supports a narrower claim:
+Do not frame this repo as a broad all-layer AttnRes routing rewrite. The current evidence supports a narrower claim:
 
-> scalable n-gram memory is most effective on top of AttnRes as either a bounded final readout or a small input-side local prior; the cleanest internal integration found so far is small `q/k/v` modulation.
+> AttnRes benefits most from scalable n-gram memory as a bounded final readout; a low-rank hashed bigram code preserves almost all of the gain while cutting memory cost sharply.
